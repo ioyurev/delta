@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
                                QPushButton, QListWidget, QListWidgetItem)
 from PySide6.QtCore import Signal, Qt
+from PySide6.QtGui import QKeyEvent
 from core.models import ProjectData
 
 class LinesManager(QWidget):
@@ -21,15 +22,27 @@ class LinesManager(QWidget):
         
         self.list_widget = QListWidget()
         self.list_widget.itemDoubleClicked.connect(self._on_edit_click)
+        
+        # Устанавливаем фокус-политику для списка
+        self.list_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        
         l_man.addWidget(self.list_widget)
         
+        # Добавляем tooltip для списка линий
+        self.list_widget.setToolTip("Double-click to edit line. Select and press Delete to remove.")
+        
         btns = QHBoxLayout()
-        btn_add = QPushButton("Create Line...")
+        btn_add = QPushButton("➕ Create")
         btn_add.clicked.connect(self.request_add_line.emit)
-        btn_edit = QPushButton("Edit...")
+        btn_edit = QPushButton("✏️ Edit")
         btn_edit.clicked.connect(self._on_edit_click)
-        btn_del = QPushButton("Delete")
+        btn_del = QPushButton("🗑️ Delete")
         btn_del.clicked.connect(self._on_delete_click)
+        
+        # Добавляем tooltips для кнопок
+        btn_add.setToolTip("Create a new tie-line between two compositions")
+        btn_edit.setToolTip("Edit selected line properties")
+        btn_del.setToolTip("Delete selected line")
         
         btns.addWidget(btn_add)
         btns.addWidget(btn_edit)
@@ -40,9 +53,19 @@ class LinesManager(QWidget):
         layout.addWidget(gb_man, stretch=1)
 
         # 2. Большая кнопка Калькулятора (ВМЕСТО старого виджета)
-        btn_calc = QPushButton("Open Intersection Calculator")
-        btn_calc.setStyleSheet("font-size: 14px; padding: 10px; font-weight: bold;")
+        btn_calc = QPushButton("📐 Intersection Calculator")
+        btn_calc.setStyleSheet("""
+            QPushButton {
+                font-size: 13px;
+                padding: 10px;
+                font-weight: bold;
+            }
+        """)
         btn_calc.clicked.connect(self.request_calc_dialog.emit)
+        
+        # Добавляем tooltip для кнопки калькулятора
+        btn_calc.setToolTip("Calculate intersection point of two lines")
+        
         layout.addWidget(btn_calc)
         
         self._current_lines = []
@@ -70,3 +93,23 @@ class LinesManager(QWidget):
         if item:
             uid = item.data(Qt.ItemDataRole.UserRole)  # Берем UID из элемента
             self.request_delete_line.emit(uid)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Обработка нажатий клавиш"""
+        if event.key() == Qt.Key.Key_Delete:
+            item = self.list_widget.currentItem()
+            if item:
+                uid = item.data(Qt.ItemDataRole.UserRole)
+                if uid:
+                    self.request_delete_line.emit(uid)
+                    return
+        
+        if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+            item = self.list_widget.currentItem()
+            if item:
+                uid = item.data(Qt.ItemDataRole.UserRole)
+                if uid:
+                    self.request_edit_line.emit(uid)
+                    return
+        
+        super().keyPressEvent(event)

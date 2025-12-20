@@ -1,9 +1,14 @@
 import numpy as np
 from typing import Tuple, Optional, List
+from fractions import Fraction
+from math import gcd
+from functools import reduce
 from core.models import Composition, CompositionError
 from core.constants import (
     EPSILON_ZERO,
     EPSILON_BOUNDARY,
+    RATIO_MAX_DENOMINATOR,
+    RATIO_MAX_VALUE,
 )
 from core.constants import TRIANGLE_HEIGHT as H
 from loguru import logger  # <--- Импорт
@@ -180,36 +185,6 @@ def get_lever_fraction(p_start: Composition, p_end: Composition, p_point: Compos
     t = np.dot(vec_point, vec_line) / len_sq
     return t
 
-def get_relative_barycentric(p1: Composition, p2: Composition, p3: Composition, target: Composition) -> tuple[float, float, float]:
-    """
-    Вычисляет барицентрические координаты точки target относительно треугольника (p1, p2, p3).
-    Использует метод площадей (определители) для 2D проекции (a, b).
-    Возвращает (u, v, w), где target = u*p1 + v*p2 + w*p3.
-    """
-    # Используем координаты a и b как x и y
-    x1, y1 = p1.a, p1.b
-    x2, y2 = p2.a, p2.b
-    x3, y3 = p3.a, p3.b
-    px, py = target.a, target.b
-    
-    # Вычисляем определитель основной матрицы (удвоенная площадь треугольника ABC)
-    det_T = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
-    
-    if abs(det_T) < EPSILON_ZERO:
-        # Треугольник вырожден в линию или точку
-        return 0.0, 0.0, 0.0
-        
-    # Вычисляем u (вес p1)
-    u = ((y2 - y3) * (px - x3) + (x3 - x2) * (py - y3)) / det_T
-    
-    # Вычисляем v (вес p2)
-    v = ((y3 - y1) * (px - x3) + (x1 - x3) * (py - y3)) / det_T
-    
-    # w = 1 - u - v
-    w = 1.0 - u - v
-    
-    return u, v, w
-
 def get_barycentric_from_cartesian(
     x1: float, y1: float, 
     x2: float, y2: float, 
@@ -223,7 +198,7 @@ def get_barycentric_from_cartesian(
     det_T = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
     
     # Защита от вырожденных треугольников (площадь ~ 0)
-    if abs(det_T) < 1e-9:
+    if abs(det_T) < EPSILON_ZERO:
         return float('inf'), float('inf'), float('inf')
         
     u = ((y2 - y3) * (px - x3) + (x3 - x2) * (py - y3)) / det_T
@@ -231,12 +206,6 @@ def get_barycentric_from_cartesian(
     w = 1.0 - u - v
     
     return u, v, w
-
-def bary_to_cart_raw(comp: Composition, is_inverted: bool) -> np.ndarray:
-    """Конвертация без проверок для скорости"""
-    v_a, v_b, v_c = get_vertices(is_inverted)
-    # Гарантируем, что a,b,c - float
-    return float(comp.a) * v_a + float(comp.b) * v_b + float(comp.c) * v_c
 
 def get_closest_composition_on_segment(comp_a: Composition, comp_b: Composition, 
                                        target: Composition, is_inverted: bool) -> Composition:
@@ -300,3 +269,53 @@ def is_point_on_line(p_start: Composition, p_end: Composition, p_point: Composit
     distance = np.linalg.norm(cross_prod) / np.sqrt(line_len_sq)
     
     return bool(distance < tol)
+
+def find_integer_ratio(floats: List[float]) -> Optional[List[int]]:
+    """
+    Находит целочисленное соотношение для списка долей.
+    
+    Примеры:
+        [0.5, 0.5] → [1, 1]
+        [0.333, 0.333, 0.333] → [1, 1, 1]
+    
+    Returns:
+        List[int]: Список целых чисел или None, если соотношение слишком сложное.
+    """
+    if not floats or all(f == 0 for f in floats):
+        return None
+    
+    try:
+        # 1. Конвертируем float в Fraction с ограничением знаменателя
+        fractions = []
+        for f in floats:
+            if f < -1e-9: # Допускаем небольшой минус из-за погрешности float
+                return None
+            # Ограничиваем знаменатель константой из настроек
+            frac = Fraction(abs(f)).limit_denominator(RATIO_MAX_DENOMINATOR)
+            fractions.append(frac)
+        
+        # 2. Находим общий знаменатель (НОК всех знаменателей)
+        denominators = [frac.denominator for frac in fractions]
+        
+        def lcm(a, b):
+            return abs(a * b) // gcd(a, b)
+            
+        common_denom = reduce(lcm, denominators)
+        
+        # 3. Приводим к общему знаменателю → получаем целые числители
+        integers = [int(frac.numerator * (common_denom // frac.denominator)) for frac in fractions]
+        
+        # 4. Сокращаем на НОД всех чисел
+        common_gcd = reduce(gcd, [i for i in integers if i != 0], integers[0] if integers else 1)
+        if common_gcd > 1:
+            integers = [i // common_gcd for i in integers]
+        
+        # 5. Проверяем, что числа не превышают разумный предел
+        if any(i > RATIO_MAX_VALUE for i in integers):
+            return None
+            
+        return integers
+        
+    except Exception as e:
+        logger.warning(f"Error calculating ratio: {e}")
+        return None

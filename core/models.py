@@ -130,7 +130,7 @@ class NamedComposition:
     uid: str = field(default_factory=lambda: str(uuid.uuid4()))
     name: str = "New Composition"
     composition: Composition = field(default_factory=Composition)
-    style: VisualStyle = field(default_factory=lambda: VisualStyle(color="#000000", size=8.0))
+    style: VisualStyle = field(default_factory=lambda: VisualStyle(size=8.0))
     
     # Смещение метки относительно точки состава (dx, dy).
     # Если None, используется авто-позиционирование.
@@ -142,7 +142,7 @@ class TieLine:
     uid: str = field(default_factory=lambda: str(uuid.uuid4()))
     start_uid: str = ""
     end_uid: str = ""
-    style: VisualStyle = field(default_factory=lambda: VisualStyle(color="#1f77b4", size=2.0))
+    style: VisualStyle = field(default_factory=VisualStyle)
 
 @dataclass
 class GridSettings:
@@ -174,6 +174,67 @@ class CompositionUpdate:
     a: Optional[float] = None
     b: Optional[float] = None
     c: Optional[float] = None
+    
+    def has_coordinate_changes(self) -> bool:
+        """Проверяет, есть ли изменения координат"""
+        return self.a is not None or self.b is not None or self.c is not None
+    
+    def apply_to(self, comp: 'NamedComposition') -> None:
+        """Применяет изменения к составу"""
+        if self.name is not None:
+            comp.name = self.name
+        
+        if self.has_coordinate_changes():
+            comp.composition = Composition(
+                self.a if self.a is not None else comp.composition.a,
+                self.b if self.b is not None else comp.composition.b,
+                self.c if self.c is not None else comp.composition.c,
+            )
+    
+    @classmethod
+    def coordinate(cls, field: str, value: float) -> 'CompositionUpdate':
+        """
+        Фабричный метод для создания обновления одной координаты.
+        
+        Args:
+            field: Имя поля ('a', 'b' или 'c')
+            value: Новое значение
+            
+        Raises:
+            ValueError: если field не является координатой
+        """
+        if field == 'a':
+            return cls(a=value)
+        elif field == 'b':
+            return cls(b=value)
+        elif field == 'c':
+            return cls(c=value)
+        raise ValueError(f"Unknown coordinate field: {field}")
+
+@dataclass
+class StyleUpdate:
+    """DTO для обновления стиля"""
+    color: Optional[str] = None
+    size: Optional[float] = None
+    line_style: Optional[str] = None
+    marker_symbol: Optional[str] = None
+    show_label: Optional[bool] = None
+    show_marker: Optional[bool] = None
+    
+    def apply_to(self, style: 'VisualStyle') -> None:
+        """Применяет ненулевые поля к стилю"""
+        if self.color is not None:
+            style.color = self.color
+        if self.size is not None:
+            style.size = self.size
+        if self.line_style is not None:
+            style.line_style = self.line_style
+        if self.marker_symbol is not None:
+            style.marker_symbol = self.marker_symbol
+        if self.show_label is not None:
+            style.show_label = self.show_label
+        if self.show_marker is not None:
+            style.show_marker = self.show_marker
 
 @dataclass
 class ProjectData:
@@ -184,3 +245,11 @@ class ProjectData:
     grid: GridSettings = field(default_factory=GridSettings)
     is_inverted: bool = False # Перевернутый треугольник или нет
     vertex_labels_pos: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+
+@dataclass
+class IntersectionResult:
+    intersection: Optional[Composition] = None
+    is_inside: bool = False
+    overlay: Optional[RenderOverlay] = None
+    message: str = ""
+    status_style: str = "" # CSS стиль для лейбла (удобно для UI)

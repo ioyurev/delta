@@ -5,11 +5,15 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout,
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
+
 from core.project_controller import ProjectController
 from core.utils import resource_path
 from core.serializer import ProjectFileError
-from core.models import RenderOverlay, Composition, CompositionUpdate
-from ui.widgets.canvas import PlotCanvas
+from core.exceptions import DuplicateEntityError, ValidationError
+from core.models import RenderOverlay, Composition, CompositionUpdate, StyleUpdate
+from core.version import get_app_version
+
+from ui.canvas import PlotCanvas
 from ui.widgets.canvas_view import CanvasView
 from ui.widgets.compositions_table import CompositionsTable
 from ui.widgets.lines_manager import LinesManager
@@ -18,109 +22,165 @@ from ui.widgets.line_dialog import LineDialog
 from ui.widgets.intersection_dialog import IntersectionDialog
 from ui.widgets.analysis_panel import AnalysisPanel
 from ui.widgets.about_dialog import AboutDialog
-from core.version import get_app_version
+from ui.widgets.docs_viewer import DocsViewer
+from ui.widgets.helpers import handle_entity_errors, build_menu, wait_cursor
+
 
 class MainWindow(QMainWindow):
+    """
+    Главное окно приложения.
+    
+    Структура:
+        - _init_*: Инициализация компонентов
+        - _on_*: Обработчики сигналов (сгруппированы по источнику)
+        - Публичные методы: Действия меню (new, save, load, export)
+    """
+
     def __init__(self):
         super().__init__()
-
-        # Сохраняем версию в переменную класса для использования в заголовке
-        self._app_version = get_app_version()
         
+        self._app_version = get_app_version()
         self._current_filepath: str | None = None
         self._is_modified: bool = False
 
         self.setWindowTitle(f"Delta v{self._app_version}")
         self.resize(1200, 800)
-        
-        self.controller = ProjectController()
-        self._current_overlay = None
-        
-        # Устанавливаем SVG как иконку окна
         self.setWindowIcon(QIcon(resource_path("icon.svg")))
         
-        self._init_ui()
-        self._init_overlay() 
+        # Контроллер — единственный источник правды
+        self.controller = ProjectController()
+        
+        # Инициализация UI
+        self._init_menu()
+        self._init_central_widget()
+        self._init_overlay()
+        self._init_status_bar()
         self._connect_signals()
         
-        # Init default
-        if not self.controller.has_compositions():
-            self.controller.create_composition("A", 1, 0, 0, show_label=False)
-            self.controller.create_composition("B", 0, 1, 0, show_label=False)
-            self.controller.create_composition("C", 0, 0, 1, show_label=False)
-        
-        # Устанавливаем целевой размер для CanvasView (1154x1000 пикселей)
-        self.canvas_view.set_target_size(1154, 1000)
-        
-        self.refresh_all()
-        
-        # Сбрасываем флаг модификации после первоначальной загрузки
+        # Начальное состояние
+        self._init_default_data()
+        self._refresh_ui()
         self._set_modified(False)
 
-    def _init_ui(self):
-        # Menu
+    # =========================================================================
+    # ИНИЦИАЛИЗАЦИЯ
+    # =========================================================================
+
+    def _init_menu(self):
+        """Создание главного меню"""
         mb = self.menuBar()
         
-        # File Menu
-        m_file = mb.addMenu("File")
-        m_file.addAction("New", self.new_project, "Ctrl+N")
-        m_file.addSeparator()
-        m_file.addAction("Open", self.load_project, "Ctrl+O")
-        m_file.addAction("Save", self.save_project, "Ctrl+S")
-        m_file.addAction("Save As...", self.save_project_as, "Ctrl+Shift+S")
-        m_file.addSeparator()
-        m_file.addAction("Export Image", self.export_image, "Ctrl+E")
-        m_file.addSeparator()
-        m_file.addAction("Exit", self.close, "Alt+F4")
+        # File меню
+        file_menu = mb.addMenu("File")
+        build_menu(file_menu, [
+            ("📄 New", self.new_project, "Ctrl+N"),
+            None,
+            ("📂 Open...", self.load_project, "Ctrl+O"),
+            ("💾 Save", self.save_project, "Ctrl+S"),
+            ("💾 Save As...", self.save_project_as, "Ctrl+Shift+S"),
+            None,
+            ("🖼️ Export Image...", self.export_image, "Ctrl+E"),
+            None,
+            ("🚪 Exit", self.close, "Alt+F4"),
+        ])
         
-        # Help Menu (НОВОЕ)
-        m_help = mb.addMenu("Help")
-        m_help.addAction("About...", self.show_about_dialog, "F1")
+        # Добавляем tooltips для пунктов меню File
+        file_menu.actions()[0].setToolTip("Create a new project")
+        file_menu.actions()[2].setToolTip("Open an existing project file")
+        file_menu.actions()[3].setToolTip("Save current project")
+        file_menu.actions()[4].setToolTip("Save project with a new name")
+        file_menu.actions()[6].setToolTip("Export current diagram as image")
         
-        # Main Layout
+        # Edit меню
+        edit_menu = mb.addMenu("Edit")
+        build_menu(edit_menu, [
+            ("↩️ Undo", self._on_undo, "Ctrl+Z"),
+            ("↪️ Redo", self._on_redo, "Ctrl+Y"),
+            None,
+            ("🗑️ Delete Selected", self._on_delete_selected, "Delete"),
+        ])
+        
+        # Добавляем tooltips для пунктов меню Edit
+        edit_menu.actions()[0].setToolTip("Undo last action")
+        edit_menu.actions()[1].setToolTip("Redo last undone action")
+        edit_menu.actions()[3].setToolTip("Delete selected composition or line")
+        
+        # Help меню
+        help_menu = mb.addMenu("Help")
+        build_menu(help_menu, [
+            ("📖 Documentation", self.show_docs, "F1"),
+            ("ℹ️ About", self.show_about_dialog, ""),
+        ])
+        
+        # Добавляем tooltips для пунктов меню Help
+        help_menu.actions()[0].setToolTip("Open user documentation")
+        help_menu.actions()[1].setToolTip("Show application information")
+
+    def _init_central_widget(self):
+        """Создание центрального виджета с разделителем"""
         central = QWidget()
         self.setCentralWidget(central)
-        main_lay = QHBoxLayout(central)
-        split = QSplitter(Qt.Orientation.Horizontal)
         
-        # 1. Canvas Area
-        left_w = QWidget()
-        left_l = QVBoxLayout(left_w)
-        left_l.setContentsMargins(0, 0, 0, 0)
+        main_layout = QHBoxLayout(central)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Левая часть — Canvas
+        splitter.addWidget(self._create_canvas_area())
+        
+        # Правая часть — Tabs
+        splitter.addWidget(self._create_tools_tabs())
+        
+        splitter.setStretchFactor(0, 1)
+        main_layout.addWidget(splitter)
+
+    def _create_canvas_area(self) -> QWidget:
+        """Создаёт область с холстом и тулбаром"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Canvas
         self.canvas = PlotCanvas()
-        self.canvas_view = CanvasView(self.canvas)  # Оборачиваем canvas в view
+        self.canvas_view = CanvasView(self.canvas)
+        self.canvas_view.set_target_size(1154, 1000)
         
+        # Toolbar
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         for action in self.toolbar.actions():
             if action.text() in ("Subplots", "Customize", "Save"):
                 action.setVisible(False)
         
-        left_l.addWidget(self.toolbar)
-        left_l.addWidget(self.canvas_view)
+        # Добавляем tooltip для элементов тулбара
+        self.toolbar.setToolTip("Navigation tools: Pan, Zoom, Home, Back/Forward")
         
-        # 2. Tools Area
-        right_tabs = QTabWidget()
+        layout.addWidget(self.toolbar)
+        layout.addWidget(self.canvas_view)
+        
+        return widget
+
+    def _create_tools_tabs(self) -> QTabWidget:
+        """Создаёт панель инструментов справа"""
+        tabs = QTabWidget()
         
         self.table_widget = CompositionsTable()
-        right_tabs.addTab(self.table_widget, "Compositions")
+        tabs.addTab(self.table_widget, "Compositions")
+        tabs.setTabToolTip(0, "Manage compositions and their visual styles")
         
         self.lines_widget = LinesManager()
-        right_tabs.addTab(self.lines_widget, "Lines")
+        tabs.addTab(self.lines_widget, "Lines")
+        tabs.setTabToolTip(1, "Create and manage tie lines between compositions")
         
-        self.analysis_widget = AnalysisPanel()
-        right_tabs.addTab(self.analysis_widget, "Analysis")
+        self.analysis_widget = AnalysisPanel(self.controller)
+        tabs.addTab(self.analysis_widget, "Analysis")
+        tabs.setTabToolTip(2, "Calculate intersections and analyze phase diagrams")
         
-        right_tabs.currentChanged.connect(lambda: self.refresh_all())
-        self.analysis_widget.update_needed.connect(self.refresh_all)
-        self.analysis_widget.overlay_changed.connect(self._on_overlay_only_update)
+        # Обновление при смене вкладки
+        tabs.currentChanged.connect(self._refresh_ui)
         
-        split.addWidget(left_w)
-        split.addWidget(right_tabs)
-        split.setStretchFactor(0, 1)
-        
-        main_lay.addWidget(split)
+        return tabs
 
     def _init_overlay(self):
+        """Создаёт оверлей с координатами"""
         self.coord_overlay = QLabel(self.canvas)
         self.coord_overlay.setStyleSheet("""
             QLabel {
@@ -135,175 +195,82 @@ class MainWindow(QMainWindow):
             }
         """)
         self.coord_overlay.hide()
+        
+        # Добавляем tooltip для координатного оверлея
+        self.coord_overlay.setToolTip("Current cursor position in barycentric coordinates")
+
+    def _init_default_data(self):
+        """Создаёт дефолтные вершины треугольника"""
+        # Отключаем сигналы на время инициализации
+        self.controller.data_changed.disconnect(self._on_data_changed)
+        
+        if not self.controller.has_compositions():
+            self.controller.create_composition("A", 1, 0, 0, show_label=False, show_marker=False)
+            self.controller.create_composition("B", 0, 1, 0, show_label=False, show_marker=False)
+            self.controller.create_composition("C", 0, 0, 1, show_label=False, show_marker=False)
+        
+        self.controller.data_changed.connect(self._on_data_changed)
 
     def _connect_signals(self):
+        """Связывает все сигналы с обработчиками"""
+        # Controller
+        self.controller.data_changed.connect(self._on_data_changed)
+        
         # Canvas
         self.canvas.mouse_moved.connect(self._on_mouse_hover)
         self.canvas.annotation_dropped.connect(self._on_label_drop)
         self.canvas.vertex_label_dropped.connect(self.controller.set_vertex_label_pos)
         
         # Compositions Table
-        self.table_widget.composition_added.connect(
-            lambda: (self.controller.create_composition(), self.refresh_all())
-        )
+        self.table_widget.composition_added.connect(self._on_composition_added)
         self.table_widget.data_changed.connect(self._on_comp_edited)
         self.table_widget.components_changed.connect(self._on_comps_changed)
         self.table_widget.grid_changed.connect(self._on_grid_changed)
         self.table_widget.view_mode_changed.connect(self._on_view_changed)
         self.table_widget.style_request.connect(self._on_comp_style_req)
         self.table_widget.composition_deleted.connect(self._on_comp_delete_req)
+        self.table_widget.validation_error.connect(self._on_validation_error)
         
         # Lines Manager
         self.lines_widget.request_add_line.connect(self._on_line_add_req)
         self.lines_widget.request_edit_line.connect(self._on_line_edit_req)
         self.lines_widget.request_delete_line.connect(self._on_line_del_req)
         self.lines_widget.request_calc_dialog.connect(self._open_calc_dialog)
-
-    # === Intersection Dialog ===
-    
-    def _open_calc_dialog(self):
-        # 1. Используем публичное свойство project_data
-        if self.controller.get_line_count() < 2:
-            QMessageBox.warning(self, "Info", "Need at least 2 lines.")
-            return
         
-        # 2. Передаем КОНТРОЛЛЕР, а не self.controller._project
-        dlg = IntersectionDialog(self.controller, parent=self)
-        dlg.overlay_changed.connect(self._on_overlay_changed)
-        dlg.intersection_found.connect(self._on_intersection_found)
-        dlg.exec()
-        
-        self._current_overlay = None
-        self.refresh_all()
-    
-    def _on_overlay_changed(self, overlay: RenderOverlay):
-        self._current_overlay = overlay
-        self._redraw_canvas()
-    
-    def _on_intersection_found(self, composition: Composition):
-        self.controller.create_composition("Intersection", 
-                                     composition.a, composition.b, composition.c)
-    
-    def _redraw_canvas(self):
-        overlay = self._current_overlay or RenderOverlay()
-        # 3. Используем публичное свойство project_data
-        self.canvas.draw_project(self.controller.project_data, overlay_data=overlay)
+        # Analysis Panel
+        self.analysis_widget.update_needed.connect(self._refresh_ui)
+        self.analysis_widget.overlay_changed.connect(self._on_overlay_only_update)
 
-    # === Line Handlers ===
+    def _on_validation_error(self, message: str):
+        """Показывает ошибку валидации в StatusBar"""
+        self.statusBar().showMessage(f"⚠ {message}", 4000)
 
-    def _on_line_add_req(self):
-        # 4. Используем get_all_compositions() вместо прямого доступа к списку
-        dlg = LineDialog(self.controller.get_all_compositions(), parent=self)
-        if dlg.exec():
-            data = dlg.get_data()
-            if data.start_uid != data.end_uid:
-                line = self.controller.create_line(data.start_uid, data.end_uid)
-                if line:
-                    self.controller.update_line_style(
-                        line.uid, data.color, data.line_style, data.width
-                    )
-                    self.refresh_all()
+    # =========================================================================
+    # ОБРАБОТЧИКИ: ДАННЫЕ И ОТРИСОВКА
+    # =========================================================================
 
-    def _on_line_edit_req(self, uid: str):
-        line_obj = None
-        for line in self.controller._project.lines:
-            if line.uid == uid:
-                line_obj = line
-                break
-        if not line_obj:
-            return
-
-        self.canvas.set_highlight_line(uid)
-        dlg = LineDialog(self.controller.get_all_compositions(), 
-                        current_line=line_obj, parent=self)
-        if dlg.exec():
-            data = dlg.get_data()
-            # 1. Обновляем координаты
-            self.controller.update_line_endpoints(uid, data.start_uid, data.end_uid)
-            # 2. Обновляем стиль
-            self.controller.update_line_style(uid, data.color, data.line_style, data.width)
-        
-        self.canvas.set_highlight_line(None)
-        self.refresh_all()
-
-    def _on_line_del_req(self, uid: str):
-        self.controller.delete_line(uid)
-        self.refresh_all()
-
-    # === Composition Handlers ===
-
-    def _on_comp_style_req(self, uid: str):
-        comp = None
-        for p in self.controller._project.compositions:
-            if p.uid == uid:
-                comp = p
-                break
-        
-        if not comp:
-            return
-        
-        # Создаем временный объект для диалога (или передаем напрямую данные)
-        dlg = CompositionStyleDialog(comp, self)
-        if dlg.exec():
-            data = dlg.get_data()
-            self.controller.update_composition_style(
-                uid, data.color, data.size, data.symbol,
-                data.show_label, data.show_marker
-            )
-            self.refresh_all()
-
-    def _on_comp_delete_req(self, uid: str):
-        self.controller.delete_composition(uid)
-        self.refresh_all()
-
-    def _on_comp_edited(self, uid: str, update: CompositionUpdate) -> None:
-        """
-        Принимает готовый DTO из таблицы и передает в контроллер.
-        Больше никаких if field == 'name'!
-        """
-        self.controller.update_composition(uid, update)
-        self.refresh_all()
-
-    def _on_label_drop(self, uid: str, x: float, y: float):
-        self.controller.set_composition_label_pos(uid=uid, x=x, y=y)
-        self.refresh_all()
-
-    # === Settings Handlers ===
-
-    def _on_comps_changed(self, names: list[str]):
-        self.controller.update_components(names=names)
-        self.refresh_all()
-
-    def _on_grid_changed(self, visible: bool, step: float):
-        self.controller.update_grid(visible=visible, step=step)
-        self.refresh_all()
-
-    def _on_view_changed(self, inverted: bool):
-        self.controller.update_view_mode(is_inverted=inverted)
-        self.refresh_all()
-
-    # === Main Refresh ===
-
-    def refresh_all(self):
-        # Любое обновление интерфейса (кроме загрузки) считаем изменением
+    def _on_data_changed(self) -> None:
+        """Вызывается при любом изменении данных в контроллере"""
         self._set_modified(True)
-        
-        # 4. Используем публичное свойство
+        self._refresh_ui()
+
+    def _refresh_ui(self) -> None:
+        """Полное обновление UI"""
         project_data = self.controller.project_data
         overlay = self.analysis_widget.get_overlay_data()
-        # ЯВНО говорим: данные изменились, перерисуй всё
-        self.canvas.draw_project(project_data, overlay_data=overlay, force_full_redraw=True) 
         
+        self.canvas.draw_project(project_data, overlay_data=overlay, force_full_redraw=True)
         self.table_widget.update_view(project_data)
         self.lines_widget.update_view(project_data)
-        self.analysis_widget.update_view(project_data)
+        self.analysis_widget.update_view()
 
     def _on_overlay_only_update(self):
+        """Быстрое обновление только overlay (без перерисовки статики)"""
         overlay = self.analysis_widget.get_overlay_data()
-        # 4. Используем публичное свойство project_data
         self.canvas.draw_project(self.controller.project_data, overlay_data=overlay)
 
     def _on_mouse_hover(self, comp: Composition):
+        """Обновляет оверлей с координатами"""
         if comp.a < -0.01 or comp.b < -0.01 or comp.c < -0.01:
             self.coord_overlay.hide()
             return
@@ -316,9 +283,140 @@ class MainWindow(QMainWindow):
         self.coord_overlay.move(10, 10)
         self.coord_overlay.show()
         self.coord_overlay.raise_()
+        
         self.analysis_widget.on_cursor_move(comp)
 
-    # === Window State Helpers ===
+    # =========================================================================
+    # ОБРАБОТЧИКИ: COMPOSITIONS
+    # =========================================================================
+
+    @handle_entity_errors
+    def _on_comp_edited(self, uid: str, update: CompositionUpdate) -> None:
+        self.controller.update_composition(uid, update)
+
+    @handle_entity_errors
+    def _on_comp_style_req(self, uid: str):
+        comp = self.controller.get_composition(uid)
+        dlg = CompositionStyleDialog(comp, self)
+        if dlg.exec():
+            data = dlg.get_data()
+            self.controller.update_composition_style(uid, StyleUpdate(
+                color=data.color,
+                size=data.size,
+                marker_symbol=data.symbol,
+                show_label=data.show_label,
+                show_marker=data.show_marker
+            ))
+            self.statusBar().showMessage(f"Style updated for '{comp.name}'", 3000)
+
+    @handle_entity_errors
+    def _on_comp_delete_req(self, uid: str):
+        deleted_name = self.controller.delete_composition(uid)
+        self.statusBar().showMessage(f"Deleted '{deleted_name}'", 3000)
+
+    @handle_entity_errors
+    def _on_label_drop(self, uid: str, x: float, y: float):
+        self.controller.set_composition_label_pos(uid=uid, x=x, y=y)
+        self.statusBar().showMessage("Label position saved", 2000)
+
+    def _on_composition_added(self) -> None:
+        """Обработчик добавления нового состава"""
+        uid = self.controller.create_composition()
+        
+        # Обратная связь
+        self.statusBar().showMessage("New composition added", 3000)
+        
+        # Выделяем новую строку в таблице
+        self.table_widget.select_composition(uid)
+
+    @handle_entity_errors
+    def _on_line_del_req(self, uid: str):
+        start_name, end_name = self.controller.delete_line(uid)
+        self.statusBar().showMessage(f"Deleted line '{start_name}' — '{end_name}'", 3000)
+
+    def _on_intersection_found(self, composition: Composition):
+        uid = self.controller.create_composition(
+            "Intersection", 
+            composition.a, composition.b, composition.c
+        )
+        self.statusBar().showMessage("Intersection point added as composition", 3000)
+        self.table_widget.select_composition(uid)
+
+    # =========================================================================
+    # ОБРАБОТЧИКИ: LINES
+    # =========================================================================
+
+    def _on_line_add_req(self):
+        dlg = LineDialog(self.controller.get_all_compositions(), parent=self)
+        if dlg.exec():
+            data = dlg.get_data()
+            try:
+                line_uid = self.controller.create_line(data.start_uid, data.end_uid)
+                self.controller.update_line_style(line_uid, StyleUpdate(
+                    color=data.color,
+                    line_style=data.line_style,
+                    size=data.width
+                ))
+                self.statusBar().showMessage("Line created", 3000)
+            except ValidationError as e:
+                QMessageBox.warning(self, "Invalid Line", str(e))
+            except DuplicateEntityError:
+                QMessageBox.information(self, "Duplicate", "This line already exists.")
+
+    @handle_entity_errors
+    def _on_line_edit_req(self, uid: str):
+        line_obj = self.controller.get_line(uid)
+        self.canvas.set_highlight_line(uid)
+        
+        dlg = LineDialog(self.controller.get_all_compositions(), 
+                         current_line=line_obj, parent=self)
+        if dlg.exec():
+            data = dlg.get_data()
+            self.controller.update_line_endpoints(uid, data.start_uid, data.end_uid)
+            self.controller.update_line_style(uid, StyleUpdate(
+                color=data.color,
+                line_style=data.line_style,
+                size=data.width
+            ))
+        
+        self.canvas.set_highlight_line(None)
+
+    def _open_calc_dialog(self):
+        if self.controller.get_line_count() < 2:
+            QMessageBox.warning(self, "Info", "Need at least 2 lines.")
+            return
+        
+        dlg = IntersectionDialog(self.controller, parent=self)
+        dlg.overlay_changed.connect(self._on_overlay_changed)
+        dlg.intersection_found.connect(self._on_intersection_found)
+        dlg.exec()
+        
+        self._refresh_ui()
+
+    def _on_overlay_changed(self, overlay: RenderOverlay):
+        self.canvas.draw_project(self.controller.project_data, overlay_data=overlay)
+
+    # =========================================================================
+    # ОБРАБОТЧИКИ: SETTINGS
+    # =========================================================================
+
+    def _on_comps_changed(self, names: list[str]):
+        self.controller.update_components(names=names)
+        self.statusBar().showMessage("Component names updated", 3000)
+
+    def _on_grid_changed(self, visible: bool, step: float):
+        self.controller.update_grid(visible=visible, step=step)
+        status = "Grid enabled" if visible else "Grid disabled"
+        self.statusBar().showMessage(status, 2000)
+
+    def _on_view_changed(self, inverted: bool):
+        self.controller.update_view_mode(is_inverted=inverted)
+        mode = "inverted" if inverted else "normal"
+        self.statusBar().showMessage(f"Triangle mode: {mode}", 2000)
+
+    # =========================================================================
+    # УПРАВЛЕНИЕ СОСТОЯНИЕМ ОКНА
+    # =========================================================================
 
     def _update_window_title(self):
         title = f"Delta v{self._app_version}"
@@ -338,20 +436,44 @@ class MainWindow(QMainWindow):
         self._is_modified = modified
         self._update_window_title()
 
-    # === File Operations ===
-
-    def export_image(self):
-        """Экспорт текущего вида графика в файл"""
-        filters = "Images (*.png *.jpg *.jpeg *.svg *.pdf);;PNG (*.png);;JPEG (*.jpg *.jpeg);;SVG (*.svg);;PDF (*.pdf)"
-        fn, _ = QFileDialog.getSaveFileName(self, "Export Image", "", filters)
+    def _check_unsaved_changes(self) -> bool:
+        """Проверяет несохранённые изменения. Возвращает True если можно продолжать."""
+        if not self._is_modified:
+            return True
+            
+        res = QMessageBox.question(
+            self, "Unsaved Changes", 
+            "Project has unsaved changes. Save them?",
+            QMessageBox.StandardButton.Yes | 
+            QMessageBox.StandardButton.No | 
+            QMessageBox.StandardButton.Cancel
+        )
         
-        if fn:
-            try:
-                # Вызываем метод экспорта у Canvas
-                self.canvas.export_image(fn)
-                self.statusBar().showMessage(f"Image exported: {fn}", 3000)
-            except Exception as e:
-                QMessageBox.critical(self, "Export Error", f"Failed to save image:\n{str(e)}")
+        if res == QMessageBox.StandardButton.Cancel:
+            return False
+        if res == QMessageBox.StandardButton.Yes:
+            self.save_project()
+            return not self._is_modified  # False если пользователь отменил сохранение
+            
+        return True
+
+    # =========================================================================
+    # ПУБЛИЧНЫЕ ДЕЙСТВИЯ (МЕНЮ)
+    # =========================================================================
+
+    def new_project(self):
+        """Создает новый проект"""
+        if not self._check_unsaved_changes():
+            return
+            
+        with wait_cursor():
+            self.controller.new_project()
+            self._init_default_data()
+            self._refresh_ui()
+        
+        self._current_filepath = None
+        self._set_modified(False)
+        self.statusBar().showMessage("New project created", 3000)
 
     def save_project(self):
         """Сохраняет в текущий файл или вызывает Save As"""
@@ -362,83 +484,103 @@ class MainWindow(QMainWindow):
 
     def save_project_as(self):
         """Диалог 'Сохранить как'"""
-        fn, _ = QFileDialog.getSaveFileName(self, "Save Project As", "", "JSON (*.json)")
-        if fn:
-            self._perform_save(fn)
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Save Project As", "", "JSON (*.json)"
+        )
+        if filepath:
+            self._perform_save(filepath)
 
     def _perform_save(self, filepath: str):
-        """Внутренняя логика сохранения"""
-        try:
-            self.controller.save_project(filepath)
-            
-            # Обновляем состояние
-            self._current_filepath = filepath
-            self._set_modified(False)
-            
-            self.statusBar().showMessage(f"Saved: {filepath}", 3000)
-        except ProjectFileError as e:
-            QMessageBox.critical(self, "Save Error", str(e))
-
-    def _check_unsaved_changes(self) -> bool:
-        """
-        Возвращает True, если можно продолжать (нет изменений или пользователь выбрал действие).
-        Возвращает False, если пользователь нажал Cancel.
-        """
-        if self._is_modified:
-            res = QMessageBox.question(
-                self, "Unsaved Changes", 
-                "Project has unsaved changes. Save them?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
-            )
-            
-            if res == QMessageBox.StandardButton.Cancel:
-                return False
-            if res == QMessageBox.StandardButton.Yes:
-                self.save_project()
-                # Если после попытки сохранения всё еще modified (например, отменил диалог сохранения), прерываем
-                if self._is_modified: 
-                    return False
-        return True
+        """Выполняет сохранение"""
+        with wait_cursor():
+            try:
+                self.controller.save_project(filepath)
+                self._current_filepath = filepath
+                self._set_modified(False)
+                self.statusBar().showMessage(f"Saved: {filepath}", 3000)
+            except ProjectFileError as e:
+                QMessageBox.critical(self, "Save Error", str(e))
 
     def load_project(self):
+        """Загружает проект из файла"""
         if not self._check_unsaved_changes():
             return
 
-        fn, _ = QFileDialog.getOpenFileName(self, "Load Project", "", "JSON (*.json)")
-        if fn:
-            try:
-                self.controller.load_project(fn)
-                self.refresh_all()
-                
-                # Обновляем состояние ПОСЛЕ refresh_all, чтобы сбросить флаг modified
-                self._current_filepath = fn
-                self._set_modified(False) 
-                
-                self.statusBar().showMessage(f"Loaded: {fn}", 3000)
-            except ProjectFileError as e:
-                QMessageBox.critical(self, "Load Error", str(e))
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Load Project", "", "JSON (*.json)"
+        )
+        if filepath:
+            with wait_cursor():
+                try:
+                    self.controller.load_project(filepath)
+                    self._refresh_ui()
+                    self._current_filepath = filepath
+                    self._set_modified(False)
+                    self.statusBar().showMessage(f"Loaded: {filepath}", 3000)
+                except ProjectFileError as e:
+                    QMessageBox.critical(self, "Load Error", str(e))
 
-    def new_project(self):
-        """Создает новый проект"""
-        if not self._check_unsaved_changes():
-            return
-            
-        # 1. Сброс данных в контроллере
-        self.controller.new_project()
+    def export_image(self):
+        """Экспорт текущего вида графика в файл"""
+        filters = "Images (*.png *.jpg *.svg *.pdf);;PNG (*.png);;SVG (*.svg);;PDF (*.pdf)"
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Export Image", "", filters
+        )
         
-        # 2. Инициализация дефолтных значений (как в __init__)
-        self.controller.create_composition("A", 1, 0, 0, show_label=False)
-        self.controller.create_composition("B", 0, 1, 0, show_label=False)
-        self.controller.create_composition("C", 0, 0, 1, show_label=False)
-        
-        # 3. Обновление UI
-        self.refresh_all()
-        
-        # 4. Сброс состояния окна (важно делать ПОСЛЕ refresh_all, т.к. он ставит modified=True)
-        self._current_filepath = None
-        self._set_modified(False)
-        self.statusBar().showMessage("New project created", 3000)
+        if filepath:
+            with wait_cursor():
+                try:
+                    self.canvas.export_image(filepath)
+                    self.statusBar().showMessage(f"Image exported: {filepath}", 3000)
+                except Exception as e:
+                    QMessageBox.critical(self, "Export Error", f"Failed to save image:\n{e}")
 
     def show_about_dialog(self):
-        dlg = AboutDialog(self)
-        dlg.exec()
+        AboutDialog(self).exec()
+
+    def show_docs(self):
+        DocsViewer(self).exec()
+
+    def _init_status_bar(self):
+        """Инициализация StatusBar с tooltip"""
+        self.statusBar().setToolTip("Status messages and notifications")
+
+    # =========================================================================
+    # ОБРАБОТЧИКИ: EDIT
+    # =========================================================================
+
+    def _on_undo(self):
+        """Отмена последнего действия"""
+        if self.controller.undo():
+            self.statusBar().showMessage("Undo", 2000)
+        else:
+            self.statusBar().showMessage("Nothing to undo", 2000)
+
+    def _on_redo(self):
+        """Повтор отменённого действия"""
+        if self.controller.redo():
+            self.statusBar().showMessage("Redo", 2000)
+        else:
+            self.statusBar().showMessage("Nothing to redo", 2000)
+
+    def _on_delete_selected(self):
+        """Удаляет выбранный элемент (состав или линию)"""
+        # Проверяем фокус на таблице составов
+        if self.table_widget.table.hasFocus():
+            item = self.table_widget.table.currentItem()
+            if item:
+                uid = self.table_widget._row_to_uid.get(item.row())
+                if uid:
+                    self._on_comp_delete_req(uid)
+                    return
+        
+        # Проверяем фокус на списке линий
+        if self.lines_widget.list_widget.hasFocus():
+            list_item = self.lines_widget.list_widget.currentItem()
+            if list_item:
+                uid = list_item.data(Qt.ItemDataRole.UserRole)
+                if uid:
+                    self._on_line_del_req(uid)
+                    return
+        
+        self.statusBar().showMessage("Nothing selected to delete", 2000)

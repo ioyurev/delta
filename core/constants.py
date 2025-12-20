@@ -38,6 +38,15 @@ EPSILON_BOUNDARY = 1e-9
 # Используется: if distance < EPSILON_COINCIDENT
 EPSILON_COINCIDENT = 1e-5
 
+# Допуск для параметра интерполяции t ∈ [0, 1]
+# Точка на отрезке, если -EPSILON_SEGMENT <= t <= 1 + EPSILON_SEGMENT
+# Используется в анализе рычага и проверке "внутри треугольника"
+EPSILON_SEGMENT = 1e-3
+
+# Допуск для проверки коллинеарности (точка на прямой)
+# 1% от характерного размера — достаточно для UI-интерактивности
+TOLERANCE_ON_LINE = 0.01
+
 # Точность для поиска целочисленных соотношений (0.5%)
 RATIO_TOLERANCE = 0.005
 
@@ -75,7 +84,7 @@ COMP_NAME_MAX_LENGTH = 100
 # ============================================================
 
 COLOR_DEFAULT_COMP = "#000000"
-COLOR_DEFAULT_LINE = "#1f77b4"
+COLOR_DEFAULT_LINE = "#000000"
 COLOR_BACKGROUND = "#FFFFFF"
 
 # Overlay

@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QResizeEvent
-from ui.widgets.canvas import PlotCanvas
+from ui.canvas import PlotCanvas
 
 class CanvasView(QWidget):
     def __init__(self, canvas: PlotCanvas):

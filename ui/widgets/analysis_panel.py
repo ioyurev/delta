@@ -2,21 +2,27 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QLabel,
                                QComboBox, QFormLayout, QRadioButton, QButtonGroup, 
                                QHBoxLayout, QStackedWidget)
 from PySide6.QtCore import Qt, Signal
-from core.models import Composition, RenderOverlay, OverlayLine, ProjectData, NamedComposition, CompositionError
+from core.models import Composition, RenderOverlay, OverlayLine, NamedComposition, CompositionError
 from core import math_utils
-from typing import Optional
-from ui.widgets.helpers import create_composition_spin
-from fractions import Fraction
-from math import gcd
-from functools import reduce
+from core.constants import (
+    EPSILON_ZERO,
+    EPSILON_SEGMENT,
+    TOLERANCE_ON_LINE,
+)
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.project_controller import ProjectController
+from ui.widgets.helpers import create_composition_spin, populate_combo
 
 
 class AnalysisPanel(QWidget):
     update_needed = Signal()
     overlay_changed = Signal()
 
-    def __init__(self):
+    def __init__(self, controller: 'ProjectController'):
         super().__init__()
+        self._controller = controller
         layout = QVBoxLayout(self)
         
         # --- 1. Mode ---
@@ -29,6 +35,10 @@ class AnalysisPanel(QWidget):
         self.bg = QButtonGroup()
         self.bg.addButton(self.rb_linear)
         self.bg.addButton(self.rb_ternary)
+        
+        # Добавляем tooltips для переключателей
+        self.rb_linear.setToolTip("Calculate lever rule along a tie-line (2 compositions)")
+        self.rb_ternary.setToolTip("Calculate fractions inside a triangle (3 compositions)")
         
         h_mode.addWidget(self.rb_linear)
         h_mode.addWidget(self.rb_ternary)
@@ -50,6 +60,11 @@ class AnalysisPanel(QWidget):
         self.lbl_c = QLabel("Composition C:")
         self.lbl_c.setVisible(False)
         
+        # Добавляем tooltips для выбора составов
+        self.cb_comp_a.setToolTip("First basis composition")
+        self.cb_comp_b.setToolTip("Second basis composition")
+        self.cb_comp_c.setToolTip("Third basis composition (ternary mode only)")
+        
         self.cb_comp_a.currentIndexChanged.connect(self._on_calc_request)
         self.cb_comp_b.currentIndexChanged.connect(self._on_calc_request)
         self.cb_comp_c.currentIndexChanged.connect(self._on_calc_request)
@@ -67,6 +82,10 @@ class AnalysisPanel(QWidget):
         self.cb_target_source = QComboBox()
         self.cb_target_source.addItems(["Mouse Cursor", "Existing Composition", "Manual Input"])
         self.cb_target_source.currentIndexChanged.connect(self._on_source_changed)
+        
+        # Добавляем tooltips для выбора целевой точки
+        self.cb_target_source.setToolTip("Choose how to specify the target point")
+        
         v_target.addWidget(self.cb_target_source)
         
         self.stack = QStackedWidget()
@@ -79,6 +98,10 @@ class AnalysisPanel(QWidget):
         # P1
         self.cb_target_comp = QComboBox()
         self.cb_target_comp.currentIndexChanged.connect(self._on_calc_request)
+        
+        # Добавляем tooltip для выбора существующего состава
+        self.cb_target_comp.setToolTip("Select existing composition as target")
+        
         self.stack.addWidget(self.cb_target_comp)
         # P2 (Manual)
         widget_manual = QWidget()
@@ -101,6 +124,11 @@ class AnalysisPanel(QWidget):
         h_inputs.addWidget(self.sp_b)
         h_inputs.addWidget(QLabel("C:"))
         h_inputs.addWidget(self.sp_c)
+        
+        # Добавляем tooltips для полей ввода координат
+        self.sp_a.setToolTip("Component A fraction (0-1)")
+        self.sp_b.setToolTip("Component B fraction (0-1)")
+        self.sp_c.setToolTip("Component C fraction (0-1)")
         
         v_man.addLayout(h_inputs)
         
@@ -139,7 +167,6 @@ class AnalysisPanel(QWidget):
         layout.addWidget(self.lbl_info)
         layout.addStretch()
         
-        self.project = None
         self._last_cursor_comp = Composition(0,0,0)
 
     def _create_spin(self):
@@ -156,8 +183,8 @@ class AnalysisPanel(QWidget):
         else:
             self.lbl_sum_warning.setStyleSheet("color: green;")
 
-    def update_view(self, project_data: ProjectData):
-        self.project = project_data
+    def update_view(self):
+        """Обновляет UI на основе данных контроллера"""
         
         # Все комбобоксы с составами
         comp_combos = [
@@ -169,31 +196,17 @@ class AnalysisPanel(QWidget):
         
         self._populate_comp_combos(comp_combos)
 
-    def _populate_comp_combos(self, combos: list):
+    def _populate_comp_combos(self, combos: list[QComboBox]) -> None:
         """Заполняет список комбобоксов составами"""
-        if not self.project:
-            return
-        
-        # Сортируем один раз
-        sorted_comps = sorted(self.project.compositions, key=lambda p: p.name)
+        sorted_comps = sorted(self._controller.get_all_compositions(), key=lambda p: p.name)
         
         for cb in combos:
-            cur_uid = cb.currentData()
-            
-            cb.blockSignals(True)
-            cb.clear()
-            
-            for p in sorted_comps:
-                name = p.name or "[Unnamed]"
-                cb.addItem(name, p.uid)
-            
-            # Восстанавливаем выбор
-            if cur_uid:
-                idx = cb.findData(cur_uid)
-                if idx >= 0:
-                    cb.setCurrentIndex(idx)
-            
-            cb.blockSignals(False)
+            populate_combo(
+                cb,
+                sorted_comps,
+                get_text=lambda p: p.name or "[Unnamed]",
+                get_data=lambda p: p.uid
+            )
 
     def _on_settings_changed(self):
         is_ternary = self.rb_ternary.isChecked()
@@ -213,8 +226,6 @@ class AnalysisPanel(QWidget):
             self.overlay_changed.emit()
 
     def _on_calc_request(self, value: Optional[float] = None):
-        if not self.project:
-            return
         idx = self.cb_target_source.currentIndex()
         target_comp = None
         if idx == 0:
@@ -227,7 +238,7 @@ class AnalysisPanel(QWidget):
         elif idx == 2:
             target_comp = Composition(self.sp_a.value(), self.sp_b.value(), self.sp_c.value())
             # Check for invalid composition (sum ≈ 0)
-            if target_comp.total < 1e-9:
+            if target_comp.total < EPSILON_ZERO:
                 self.lbl_info.setText("Invalid composition (Sum ≈ 0)")
                 self.lbl_info.setStyleSheet("color: red;")
                 return
@@ -235,52 +246,10 @@ class AnalysisPanel(QWidget):
             self._calculate_and_display(target_comp)
             self._emit_update_req()
 
-    def _find_integer_ratio(self, floats):
-        """
-        Находит целочисленное соотношение для списка долей.
-        
-        Примеры:
-            [0.5, 0.5] → [1, 1]
-            [0.4, 0.0, 0.6] → [2, 0, 3]
-            [0.333, 0.333, 0.333] → [1, 1, 1]
-            [0.125, 0.375, 0.5] → [1, 3, 4]
-        """
-        
-        if not floats or all(f == 0 for f in floats):
-            return None
-        
-        # 1. Конвертируем float в Fraction с ограничением знаменателя
-        #    limit_denominator(100) находит ближайшую дробь с знаменателем ≤ 100
-        fractions = []
-        for f in floats:
-            if f < 0:
-                return None  # Отрицательные — экстраполяция, ratio не имеет смысла
-            frac = Fraction(f).limit_denominator(100)
-            fractions.append(frac)
-        
-        # 2. Находим общий знаменатель (НОК всех знаменателей)
-        denominators = [frac.denominator for frac in fractions]
-        lcm = denominators[0]
-        for d in denominators[1:]:
-            lcm = lcm * d // gcd(lcm, d)
-        
-        # 3. Приводим к общему знаменателю → получаем целые числители
-        integers = [int(frac * lcm) for frac in fractions]
-        
-        # 4. Сокращаем на НОД всех чисел
-        common_gcd = reduce(gcd, [i for i in integers if i != 0], integers[0])
-        if common_gcd > 1:
-            integers = [i // common_gcd for i in integers]
-        
-        # 5. Проверяем, что не слишком большие числа (разумный предел)
-        if any(i > 20 for i in integers):
-            return None  # Слишком сложное соотношение
-        
-        return integers
 
     def _calculate_and_display(self, comp: Composition):
         # Проверка на "пустую" точку
-        if comp.total < 1e-9:
+        if comp.total < EPSILON_ZERO:
             self.lbl_info.setText("Invalid composition (Sum ≈ 0)")
             self.lbl_info.setStyleSheet("color: red;")
             return
@@ -307,7 +276,7 @@ class AnalysisPanel(QWidget):
                 # ТОЛЬКО если источник НЕ мышь.
                 # Для мыши мы допускаем проекцию (перпендикуляр).
                 if not is_mouse_source:
-                    if not math_utils.is_point_on_line(p_a.composition, p_b.composition, comp, tol=0.01):
+                    if not math_utils.is_point_on_line(p_a.composition, p_b.composition, comp, tol=TOLERANCE_ON_LINE):
                         self.lbl_info.setText("Error: Point is NOT on the selected line.")
                         self.lbl_info.setStyleSheet("color: #D8000C; background-color: #FFBABA; padding: 10px; border-radius: 4px;")
                         return
@@ -316,8 +285,7 @@ class AnalysisPanel(QWidget):
                 t = math_utils.get_lever_fraction(p_a.composition, p_b.composition, comp)
                 
                 # Проверка на экстраполяцию
-                epsilon = 1e-3 
-                if t < -epsilon or t > (1.0 + epsilon):
+                if t < -EPSILON_SEGMENT or t > (1.0 + EPSILON_SEGMENT):
                     self.lbl_info.setText("Error: Point is OUTSIDE the segment.")
                     self.lbl_info.setStyleSheet("color: #D8000C; background-color: #FFBABA; padding: 10px; border-radius: 4px;")
                     return
@@ -332,7 +300,7 @@ class AnalysisPanel(QWidget):
                             f"  {p_b.name:<10} : {val_b*100:.2f}%")
                 
                 if not is_mouse_source:
-                    ints = self._find_integer_ratio([val_a, val_b])
+                    ints = math_utils.find_integer_ratio([val_a, val_b])
                     if ints:
                         res_text += (f"\n\nStoichiometry (Ratio):\n"
                                      f"  {p_a.name:<10} : {ints[0]}\n"
@@ -349,7 +317,7 @@ class AnalysisPanel(QWidget):
                     self.lbl_info.setText("Error: Select 3 distinct compositions.")
                     return
 
-                is_inv = self.project.is_inverted if self.project else True
+                is_inv = self._controller.is_inverted()
 
                 try:
                     # ВАЖНО: Используем bary_to_cart (с нормализацией), а не _raw!
@@ -374,11 +342,10 @@ class AnalysisPanel(QWidget):
                 # 3. Строгая проверка границ
                 # Точка внутри, только если 0 <= u,v,w <= 1
                 # Добавляем epsilon для точности float
-                eps = 1e-3
                 is_inside = (
-                    -eps <= u <= 1.0 + eps and
-                    -eps <= v <= 1.0 + eps and
-                    -eps <= w <= 1.0 + eps
+                    -EPSILON_SEGMENT <= u <= 1.0 + EPSILON_SEGMENT and
+                    -EPSILON_SEGMENT <= v <= 1.0 + EPSILON_SEGMENT and
+                    -EPSILON_SEGMENT <= w <= 1.0 + EPSILON_SEGMENT
                 )
 
                 if not is_inside:
@@ -395,7 +362,7 @@ class AnalysisPanel(QWidget):
                             f"  {p_c.name:<10} : {w*100:.2f}%")
                 
                 if not is_mouse_source:
-                    ints = self._find_integer_ratio([u, v, w])
+                    ints = math_utils.find_integer_ratio([u, v, w])
                     if ints:
                         res_text += (f"\n\nStoichiometry (Ratio):\n"
                                      f"  {p_a.name:<10} : {ints[0]}\n"
@@ -455,7 +422,7 @@ class AnalysisPanel(QWidget):
                     # В этом случае мы переписываем projection_point на проекцию
                     if idx == 0:
                         cursor_comp = self._last_cursor_comp
-                        is_inv = self.project.is_inverted if self.project else True
+                        is_inv = self._controller.is_inverted()
                         
                         proj_comp = math_utils.get_closest_composition_on_segment(
                             p1, p2, cursor_comp, is_inv
@@ -484,13 +451,8 @@ class AnalysisPanel(QWidget):
         return overlay
 
     def _get_comp(self, uid: str) -> Optional[NamedComposition]:
-        if not self.project:
-            return None
-        # Поиск состава по uid в compositions
-        for comp in self.project.compositions:
-            if comp.uid == uid:
-                return comp
-        return None
+        """Делегирует поиск контроллеру (O(1) через кэш)"""
+        return self._controller.find_composition(uid)
 
     def _emit_update_req(self):
         self.update_needed.emit()

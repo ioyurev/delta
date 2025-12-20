@@ -1,9 +1,11 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
                                QComboBox, QPushButton, QCheckBox, QLabel, QGroupBox)
 from PySide6.QtCore import Signal
-from core.models import RenderOverlay, OverlayLine, Composition
-from core import math_utils
-from core.project_controller import ProjectController 
+from core.models import RenderOverlay, Composition, TieLine
+from core.project_controller import ProjectController
+from core.exceptions import EntityNotFoundError
+from ui.widgets.helpers import populate_combo
+from typing import Optional
 
 class IntersectionDialog(QDialog):
     """
@@ -20,7 +22,7 @@ class IntersectionDialog(QDialog):
     def __init__(self, controller: ProjectController, parent=None):
         super().__init__(parent)
         self._controller = controller
-        self.found_intersection = None # Здесь храним найденную точку (Composition)
+        self.found_intersection: Optional[Composition] = None # Здесь храним найденную точку (Composition)
         
         self.setWindowTitle("Intersection Calculator")
         self.setFixedWidth(400)
@@ -46,6 +48,10 @@ class IntersectionDialog(QDialog):
         self.cb_line2 = QComboBox()
         self.cb_line2.currentIndexChanged.connect(self._recalc)
         
+        # Добавляем tooltips для выбора линий
+        self.cb_line1.setToolTip("First line for intersection")
+        self.cb_line2.setToolTip("Second line for intersection")
+        
         form.addRow("Line 1:", self.cb_line1)
         form.addRow("Line 2:", self.cb_line2)
         gb_sel.setLayout(form)
@@ -55,6 +61,10 @@ class IntersectionDialog(QDialog):
         self.chk_extrap = QCheckBox("Show Extrapolations (to borders)")
         self.chk_extrap.setChecked(True)
         self.chk_extrap.toggled.connect(self._recalc)
+        
+        # Добавляем tooltip для опции экстраполяции
+        self.chk_extrap.setToolTip("Extend lines to triangle boundaries to find intersection")
+        
         layout.addWidget(self.chk_extrap)
         
         # Результат
@@ -69,6 +79,9 @@ class IntersectionDialog(QDialog):
         self.btn_add.setEnabled(False)
         self.btn_add.clicked.connect(self._on_add_comp)
         
+        # Добавляем tooltip для кнопки сохранения
+        self.btn_add.setToolTip("Save intersection point as a new composition")
+        
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.reject)
         
@@ -78,21 +91,24 @@ class IntersectionDialog(QDialog):
 
     def _populate_combos(self):
         """Заполняет комбобоксы списком линий"""
-        # 2. Используем геттер контроллера
         lines = self._controller.get_all_lines()
         
-        for i, line in enumerate(lines):
-            # 3. Используем "умный" метод контроллера для поиска концов
-            start_comp, end_comp = self._controller.get_line_endpoints(line.uid)
-            
-            n1 = start_comp.name if start_comp else "?"
-            n2 = end_comp.name if end_comp else "?"
-            txt = f"{i+1}: {n1} — {n2}"
-            
-            self.cb_line1.addItem(txt, line.uid)
-            self.cb_line2.addItem(txt, line.uid)
+        def get_line_text(line: TieLine) -> str:
+            try:
+                start, end = self._controller.get_line_endpoints(line.uid)
+                return f"{start.name} — {end.name}"
+            except EntityNotFoundError:
+                return "? — ?"
         
-        # По умолчанию выбираем разные линии
+        for cb in (self.cb_line1, self.cb_line2):
+            populate_combo(
+                cb,
+                lines,
+                get_text=get_line_text,
+                get_data=lambda line: line.uid,
+                preserve_selection=False
+            )
+        
         if self.cb_line2.count() > 1:
             self.cb_line2.setCurrentIndex(1)
 
@@ -112,80 +128,25 @@ class IntersectionDialog(QDialog):
             self._emit_overlay(overlay)
             return
         
-        # 4. Получаем объекты линий через контроллер
-        line1 = self._controller.get_line(uid1)
-        line2 = self._controller.get_line(uid2)
+        # Вызов контроллера (вся логика теперь там)
+        result = self._controller.calculate_intersection(uid1, uid2, self.chk_extrap.isChecked())
         
-        if not line1 or not line2:
-            self.lbl_result.setText("Invalid lines.")
-            self._emit_overlay(overlay)
-            return
+        # Обновление UI по результату
+        self.lbl_result.setText(result.message)
         
-        # 5. Получаем составы (точки) через контроллер
-        p1_comp, p2_comp = self._controller.get_line_endpoints(line1.uid)
-        p3_comp, p4_comp = self._controller.get_line_endpoints(line2.uid)
-        
-        # Явная проверка для Pylance (Type Narrowing)
-        if p1_comp is None or p2_comp is None or p3_comp is None or p4_comp is None:
-            self.lbl_result.setText("Invalid lines (missing compositions).")
-            self._emit_overlay(overlay)
-            return
-        
-        # Подсветка выбранных линий
-        overlay.highlight_lines_uids = [uid1, uid2]
-        # Экстраполяция до границ
-        if self.chk_extrap.isChecked():
-            ext1 = math_utils.get_line_triangle_intersections(p1_comp.composition, p2_comp.composition)
-            if len(ext1) == 2:
-                overlay.extrap_lines.append(
-                    OverlayLine(start=ext1[0], end=ext1[1], color=line1.style.color)
-                )
-            
-            ext2 = math_utils.get_line_triangle_intersections(p3_comp.composition, p4_comp.composition)
-            if len(ext2) == 2:
-                overlay.extrap_lines.append(
-                    OverlayLine(start=ext2[0], end=ext2[1], color=line2.style.color)
-                )
-        
-        # Расчёт пересечения
-        intersect = math_utils.solve_intersection(p1_comp.composition, p2_comp.composition, p3_comp.composition, p4_comp.composition)
-        
-        if intersect:
-            # Используем normalized вместо устаревшего as_array()
-            arr = intersect.normalized
-            is_inside = all(x >= -0.001 for x in arr)
-            
-            if is_inside:
-                self.found_intersection = intersect
-                self.btn_add.setEnabled(True)
-                overlay.intersect_point = intersect
-                
-                nms = self._controller.get_components()
-                self.lbl_result.setText(
-                    f"Intersection found:\n"
-                    f"{nms[0]} = {intersect.a:.4f}\n"
-                    f"{nms[1]} = {intersect.b:.4f}\n"
-                    f"{nms[2]} = {intersect.c:.4f}"
-                )
-                self.lbl_result.setStyleSheet(
-                    "color: green; font-weight: bold; "
-                    "background: #e0f0e0; padding: 10px;"
-                )
-            else:
-                self.lbl_result.setText("Intersection is outside the triangle.")
-                self.lbl_result.setStyleSheet(
-                    "color: orange; font-weight: bold; "
-                    "background: #fff0e0; padding: 10px;"
-                )
+        # Применяем стиль, если он есть, иначе сбрасываем на дефолт
+        if result.status_style:
+            self.lbl_result.setStyleSheet(result.status_style)
         else:
-            self.lbl_result.setText("Lines are parallel.")
-            self.lbl_result.setStyleSheet(
-                "color: red; font-weight: bold; "
-                "background: #ffe0e0; padding: 10px;"
-            )
-        
-        # ✅ Испускаем сигнал вместо прямого вызова
-        self._emit_overlay(overlay)
+            self.lbl_result.setStyleSheet("font-weight: bold; padding: 10px; background: #f0f0f0; border-radius: 4px;")
+
+        # Сохраняем результат для кнопки Add
+        if result.intersection and result.is_inside:
+            self.found_intersection = result.intersection
+            self.btn_add.setEnabled(True)
+            
+        # Обновляем графику
+        self._emit_overlay(result.overlay or RenderOverlay())
     
     def _emit_overlay(self, overlay: RenderOverlay):
         """Безопасно испускает сигнал overlay_changed"""

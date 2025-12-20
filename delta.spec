@@ -11,9 +11,12 @@ a = Analysis(
     [MAIN_SCRIPT],
     pathex=[],
     binaries=[],
-    datas=[
+datas=[
         # SVG нужна внутри exe для About диалога
         ('icon.svg', '.'), 
+        # Файлы документации для виджета DocsViewer
+        ('README.md', '.'), 
+        ('MANUAL.md', '.'), 
     ] + copy_metadata('delta'), # Метаданные сработают, т.к. мы установим пакет в build.cmd
     hiddenimports=[
         'matplotlib.backends.backend_qtagg',

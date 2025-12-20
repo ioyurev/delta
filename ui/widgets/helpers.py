@@ -1,7 +1,11 @@
-"""Вспомогательные функции для создания виджетов"""
+"""Вспомогательные функции и виджеты для UI"""
 
-from PySide6.QtWidgets import QDoubleSpinBox
-from typing import Callable, Optional
+from PySide6.QtWidgets import QDoubleSpinBox, QMenu, QComboBox, QPushButton, QColorDialog, QApplication
+from PySide6.QtCore import Signal, Qt
+from PySide6.QtGui import QColor, QCursor
+from typing import Callable, Optional, TypeVar, ParamSpec, Sequence
+from functools import wraps
+from contextlib import contextmanager
 from core.constants import (
     MARKER_SIZE_MIN,
     MARKER_SIZE_MAX,
@@ -10,7 +14,97 @@ from core.constants import (
     LINE_WIDTH_MAX,
     LINE_WIDTH_DEFAULT
 )
+from core.exceptions import EntityNotFoundError
 
+P = ParamSpec('P')
+T = TypeVar('T')
+
+
+# =============================================================================
+# ВИДЖЕТЫ
+# =============================================================================
+
+class ColorPickerButton(QPushButton):
+    """
+    Кнопка выбора цвета с превью.
+    
+    Отображает текущий цвет как фон кнопки и открывает QColorDialog по клику.
+    
+    Signals:
+        color_changed(str): Испускается при выборе нового цвета (hex формат)
+    
+    Example:
+        btn = ColorPickerButton("#FF0000")
+        btn.color_changed.connect(lambda c: print(f"New color: {c}"))
+        
+        # Получить текущий цвет
+        current = btn.color()  # "#FF0000"
+        
+        # Установить программно
+        btn.set_color("#00FF00")
+    """
+    
+    color_changed = Signal(str)
+    
+    def __init__(self, initial_color: str = "#000000", parent=None):
+        super().__init__(parent)
+        self._color = initial_color
+        self._update_appearance()
+        self.clicked.connect(self._on_clicked)
+        
+        # Минимальная ширина для читаемости hex-кода
+        self.setMinimumWidth(100)
+        
+        # Добавляем tooltip для кнопки выбора цвета
+        self.setToolTip("Click to choose color")
+    
+    def color(self) -> str:
+        """Возвращает текущий цвет в hex формате"""
+        return self._color
+    
+    def set_color(self, hex_color: str) -> None:
+        """Устанавливает цвет программно (без испускания сигнала)"""
+        self._color = hex_color
+        self._update_appearance()
+    
+    def _update_appearance(self) -> None:
+        """Обновляет внешний вид кнопки"""
+        # Определяем контрастный цвет текста
+        qcolor = QColor(self._color)
+        # Простая формула яркости: если светлый фон — тёмный текст
+        luminance = 0.299 * qcolor.red() + 0.587 * qcolor.green() + 0.114 * qcolor.blue()
+        text_color = "#000000" if luminance > 128 else "#FFFFFF"
+        
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self._color};
+                color: {text_color};
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 5px 10px;
+                font-family: monospace;
+            }}
+            QPushButton:hover {{
+                border: 2px solid #333;
+            }}
+        """)
+        self.setText(self._color.upper())
+    
+    def _on_clicked(self) -> None:
+        """Открывает диалог выбора цвета"""
+        dialog = QColorDialog(QColor(self._color), self)
+        
+        if dialog.exec():
+            new_color = dialog.selectedColor().name()
+            if new_color != self._color:
+                self._color = new_color
+                self._update_appearance()
+                self.color_changed.emit(self._color)
+
+
+# =============================================================================
+# ФАБРИКИ SPINBOX
+# =============================================================================
 
 def create_double_spin(
     min_val: float = 0.0,
@@ -33,7 +127,10 @@ def create_double_spin(
     return spin
 
 
-def create_marker_size_spin(value: float = MARKER_SIZE_DEFAULT, on_change: Optional[Callable[[float], None]] = None) -> QDoubleSpinBox:
+def create_marker_size_spin(
+    value: float = MARKER_SIZE_DEFAULT, 
+    on_change: Optional[Callable[[float], None]] = None
+) -> QDoubleSpinBox:
     """SpinBox для размера маркера"""
     return create_double_spin(
         min_val=MARKER_SIZE_MIN,
@@ -45,7 +142,10 @@ def create_marker_size_spin(value: float = MARKER_SIZE_DEFAULT, on_change: Optio
     )
 
 
-def create_line_width_spin(value: float = LINE_WIDTH_DEFAULT, on_change: Optional[Callable[[float], None]] = None) -> QDoubleSpinBox:
+def create_line_width_spin(
+    value: float = LINE_WIDTH_DEFAULT, 
+    on_change: Optional[Callable[[float], None]] = None
+) -> QDoubleSpinBox:
     """SpinBox для толщины линии"""
     return create_double_spin(
         min_val=LINE_WIDTH_MIN,
@@ -57,7 +157,10 @@ def create_line_width_spin(value: float = LINE_WIDTH_DEFAULT, on_change: Optiona
     )
 
 
-def create_composition_spin(value: float = 0.0, on_change: Optional[Callable[[float], None]] = None) -> QDoubleSpinBox:
+def create_composition_spin(
+    value: float = 0.0, 
+    on_change: Optional[Callable[[float], None]] = None
+) -> QDoubleSpinBox:
     """SpinBox для компонента композиции (0-1)"""
     return create_double_spin(
         min_val=0.0,
@@ -67,3 +170,99 @@ def create_composition_spin(value: float = 0.0, on_change: Optional[Callable[[fl
         decimals=3,
         on_change=on_change
     )
+
+
+# =============================================================================
+# ДЕКОРАТОРЫ
+# =============================================================================
+
+def handle_entity_errors(func: Callable[P, T]) -> Callable[P, T | None]:
+    """
+    Декоратор для методов UI — перехватывает EntityNotFoundError.
+    При ошибке просто возвращает None (операция отменяется молча).
+    """
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T | None:
+        try:
+            return func(*args, **kwargs)
+        except EntityNotFoundError:
+            return None
+    return wrapper
+
+
+# =============================================================================
+# УТИЛИТЫ МЕНЮ
+# =============================================================================
+
+MenuItem = tuple[str, Callable[[], None], str] | tuple[str, Callable[[], bool], str] | None
+
+def build_menu(menu: QMenu, items: list[MenuItem]) -> None:
+    """
+    Строит меню из декларативного описания.
+    
+    Args:
+        menu: Меню для заполнения
+        items: Список элементов. None = разделитель.
+    """
+    for item in items:
+        if item is None:
+            menu.addSeparator()
+        else:
+            label, callback, shortcut = item
+            if shortcut:
+                menu.addAction(label, callback, shortcut)
+            else:
+                menu.addAction(label, callback)
+
+
+# =============================================================================
+# УТИЛИТЫ COMBOBOX
+# =============================================================================
+
+def populate_combo(
+    combo: QComboBox,
+    items: Sequence[T],
+    get_text: Callable[[T], str],
+    get_data: Callable[[T], str],
+    preserve_selection: bool = True
+) -> None:
+    """
+    Универсальное заполнение ComboBox.
+    
+    Args:
+        combo: Виджет для заполнения
+        items: Список элементов
+        get_text: Функция получения текста для отображения
+        get_data: Функция получения данных (обычно uid)
+        preserve_selection: Сохранять ли текущий выбор
+    """
+    current = combo.currentData() if preserve_selection else None
+    
+    combo.blockSignals(True)
+    combo.clear()
+    
+    for item in items:
+        combo.addItem(get_text(item), get_data(item))
+    
+    if current is not None:
+        idx = combo.findData(current)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+    
+    combo.blockSignals(False)
+
+
+@contextmanager
+def wait_cursor():
+    """
+    Контекстный менеджер для отображения курсора ожидания.
+    
+    Example:
+        with wait_cursor():
+            heavy_operation()
+    """
+    QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
