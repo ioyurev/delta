@@ -1,6 +1,6 @@
 [project]
 name = "delta"
-version = "0.2.0"
+version = "0.3.0"
 description = "Delta — инструмент для построения, визуализации и анализа тройных диаграмм состояния (Треугольник Гиббса) с поддержкой правила рычага и поиска пересечений конод."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -9,12 +9,15 @@ dependencies = [
     "markdown>=3.10",
     "matplotlib>=3.10.8",
     "numpy>=2.3.5",
+    "pydantic>=2.12.5",
     "pyside6>=6.10.1",
 ]
 
 [dependency-groups]
 dev = [
     "pyinstaller>=6.17.0",
+    "pytest>=9.0.2",
+    "pytest-mypy>=1.0.1",
     "types-markdown>=3.10.0.20251106",
 ]
 

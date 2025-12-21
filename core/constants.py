@@ -30,13 +30,16 @@ COMP_LABEL_OFFSET = 0.03
 # Используется: len_sq < EPSILON_ZERO
 EPSILON_ZERO = 1e-12
 
-# Проверка точки на границе треугольника
-# Используется: if value >= -EPSILON_BOUNDARY
-EPSILON_BOUNDARY = 1e-9
+# Проверка точки на границе (чуть жестче для научной точности)
+EPSILON_BOUNDARY = 1e-10
 
-# Сравнение двух точек на совпадение
-# Используется: if distance < EPSILON_COINCIDENT
-EPSILON_COINCIDENT = 1e-5
+# Сравнение двух точек на математическое совпадение (Identity)
+# Должно быть сопоставимо с точностью стехиометрии (5e-5)
+EPSILON_COINCIDENT = 5e-5
+
+# Абсолютный допуск сравнения составов (в мольных долях)
+# 5e-5 = 0.005 мол.% — соответствует RATIO_TOLERANCE для стехиометрии
+COMPOSITION_COMPARISON_ATOL = 5e-5
 
 # Допуск для параметра интерполяции t ∈ [0, 1]
 # Точка на отрезке, если -EPSILON_SEGMENT <= t <= 1 + EPSILON_SEGMENT
@@ -44,11 +47,16 @@ EPSILON_COINCIDENT = 1e-5
 EPSILON_SEGMENT = 1e-3
 
 # Допуск для проверки коллинеарности (точка на прямой)
-# 1% от характерного размера — достаточно для UI-интерактивности
-TOLERANCE_ON_LINE = 0.01
+# Используется в научных расчётах (Analysis Panel)
+# 1e-4 = 0.01 мол.% — высокая научная точность
+TOLERANCE_ON_LINE_STRICT = 1e-4
 
-# Точность для поиска целочисленных соотношений (0.5%)
-RATIO_TOLERANCE = 0.005
+# Допуск для UI-интерактивности (hover, click detection)
+# 1% — достаточно для визуального определения
+TOLERANCE_ON_LINE_UI = 0.01
+
+# Точность для поиска целочисленных соотношений (0.005 моль.%)
+RATIO_TOLERANCE = 5e-5
 
 
 # ============================================================
@@ -63,21 +71,53 @@ GRID_STEP_DEFAULT = 0.1
 # Размер маркера
 MARKER_SIZE_MIN = 0.5
 MARKER_SIZE_MAX = 50.0
-MARKER_SIZE_DEFAULT = 8.0
+MARKER_SIZE_DEFAULT = 4.0
 
 # Толщина линии
 LINE_WIDTH_MIN = 0.5
 LINE_WIDTH_MAX = 10.0
 LINE_WIDTH_DEFAULT = 2.0
 
-# Максимальное число в соотношении (например, 2:3 ок, 17:23 — слишком сложно)
-RATIO_MAX_VALUE = 15
-
-# Максимальный знаменатель при поиске соотношений
-RATIO_MAX_DENOMINATOR = 50
+# Максимальный знаменатель поиска дроби.
+# Ставим 1,000,000, чтобы алгоритм мог найти соотношения с точностью 10^-5-10^-6.
+# Это позволяет находить как [1, 2], так и [1, 999999].
+RATIO_MAX_DENOMINATOR = 1000000
 
 # Максимальная длина имени состава
 COMP_NAME_MAX_LENGTH = 100
+
+# Максимальное значение координаты в UI (clamping)
+COORD_INPUT_MIN = 0.0
+COORD_INPUT_MAX = 1000.0
+
+# ============================================================
+# СИСТЕМНЫЕ КОНСТАНТЫ
+# ============================================================
+
+# Ограничения ввода
+COORD_INPUT_MIN = 0.0
+COORD_INPUT_MAX = 1.0
+
+# Точность отображения
+DISPLAY_DECIMALS_TABLE = 4
+DISPLAY_DECIMALS_CURSOR = 4
+DISPLAY_DECIMALS_ANALYSIS = 3
+
+# ============================================================
+# ТЕКСТЫ И ПОДСКАЗКИ
+# ============================================================
+
+# Единицы измерения
+UNITS_MOLAR_FRACTION = "mol. fraction"
+UNITS_MOLAR_PERCENT = "mol.%"
+
+# Tooltips для координат
+TOOLTIP_COORDINATE = "Molar fraction (0 to 1). Values are automatically normalized so that A + B + C = 1"
+TOOLTIP_COORDINATE_SHORT = "Molar fraction (normalized)"
+
+# Порог для предупреждения о ненормализованных данных
+# Если |sum - 1.0| > этого значения, показываем предупреждение
+NORMALIZATION_WARNING_THRESHOLD = 0.01  # 1%
 
 # ============================================================
 # ЦВЕТА ПО УМОЛЧАНИЮ

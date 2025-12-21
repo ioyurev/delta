@@ -1,10 +1,12 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
                                QComboBox, QPushButton, QCheckBox, QLabel, QGroupBox)
 from PySide6.QtCore import Signal
-from core.models import RenderOverlay, Composition, TieLine
+from core.models import RenderOverlay, Composition, TieLine, IntersectionStatus, OverlayLine, IntersectionResult
 from core.project_controller import ProjectController
-from core.exceptions import EntityNotFoundError
-from ui.widgets.helpers import populate_combo
+from core.exceptions import EntityNotFoundError, ValidationError
+from core import math_utils
+from core.constants import DISPLAY_DECIMALS_CURSOR
+from ui.widgets.helpers import populate_combo, get_message_style
 from typing import Optional
 
 class IntersectionDialog(QDialog):
@@ -15,6 +17,12 @@ class IntersectionDialog(QDialog):
         overlay_changed(RenderOverlay): Испускается при изменении overlay для отрисовки
         intersection_found(Composition): Испускается при добавлении точки пересечения
     """
+    
+    # Стили результатов
+    _STYLE_SUCCESS = "color: green; font-weight: bold; background: #e0f0e0; padding: 10px; border-radius: 4px;"
+    _STYLE_WARNING = "color: orange; font-weight: bold; background: #fff0e0; padding: 10px; border-radius: 4px;"
+    _STYLE_ERROR = "color: red; font-weight: bold; background: #ffe0e0; padding: 10px; border-radius: 4px;"
+    _STYLE_DEFAULT = "font-weight: bold; padding: 10px; background: #f0f0f0; border-radius: 4px;"
     
     overlay_changed = Signal(RenderOverlay)
     intersection_found = Signal(Composition)
@@ -70,7 +78,7 @@ class IntersectionDialog(QDialog):
         # Результат
         self.lbl_result = QLabel("Result: ...")
         self.lbl_result.setWordWrap(True)
-        self.lbl_result.setStyleSheet("font-weight: bold; padding: 10px; background: #f0f0f0; border-radius: 4px;")
+        self.lbl_result.setStyleSheet(get_message_style("default"))
         layout.addWidget(self.lbl_result)
         
         # Кнопки
@@ -113,40 +121,41 @@ class IntersectionDialog(QDialog):
             self.cb_line2.setCurrentIndex(1)
 
     def _recalc(self):
-        """Пересчитывает пересечение и ИСПУСКАЕТ СИГНАЛ с overlay"""
+        """Пересчитывает пересечение и обновляет UI"""
         uid1 = self.cb_line1.currentData()
         uid2 = self.cb_line2.currentData()
         
         # Сброс состояния
-        overlay = RenderOverlay()
         self.found_intersection = None
         self.btn_add.setEnabled(False)
         
-        # Валидация
-        if uid1 == uid2 or not uid1 or not uid2:
-            self.lbl_result.setText("Select two different lines.")
-            self._emit_overlay(overlay)
+        # Валидация на уровне UI
+        if not uid1 or not uid2:
+            self._show_result("Select two lines.", self._STYLE_DEFAULT)
+            self._emit_overlay(RenderOverlay())
             return
         
-        # Вызов контроллера (вся логика теперь там)
-        result = self._controller.calculate_intersection(uid1, uid2, self.chk_extrap.isChecked())
+        if uid1 == uid2:
+            self._show_result("Select two different lines.", self._STYLE_DEFAULT)
+            self._emit_overlay(RenderOverlay())
+            return
         
-        # Обновление UI по результату
-        self.lbl_result.setText(result.message)
+        # Вызов контроллера (только данные)
+        try:
+            result = self._controller.calculate_intersection(uid1, uid2)
+        except (EntityNotFoundError, ValidationError) as e:
+            self._show_result(f"Error: {e}", self._STYLE_ERROR)
+            self._emit_overlay(RenderOverlay())
+            return
         
-        # Применяем стиль, если он есть, иначе сбрасываем на дефолт
-        if result.status_style:
-            self.lbl_result.setStyleSheet(result.status_style)
-        else:
-            self.lbl_result.setStyleSheet("font-weight: bold; padding: 10px; background: #f0f0f0; border-radius: 4px;")
-
-        # Сохраняем результат для кнопки Add
-        if result.intersection and result.is_inside:
-            self.found_intersection = result.intersection
-            self.btn_add.setEnabled(True)
-            
+        # Построение overlay (UI-логика)
+        overlay = self._build_overlay(result, uid1, uid2)
+        
+        # Форматирование результата (UI-логика)
+        self._display_result(result)
+        
         # Обновляем графику
-        self._emit_overlay(result.overlay or RenderOverlay())
+        self._emit_overlay(overlay)
     
     def _emit_overlay(self, overlay: RenderOverlay):
         """Безопасно испускает сигнал overlay_changed"""
@@ -159,6 +168,88 @@ class IntersectionDialog(QDialog):
             self.intersection_found.emit(self.found_intersection)
             self.accept()
     
+    def _build_overlay(self, result: IntersectionResult, uid1: str, uid2: str) -> RenderOverlay:
+        """Строит overlay для отображения на графике"""
+        overlay = RenderOverlay()
+        overlay.highlight_lines_uids = [uid1, uid2]
+        
+        # Экстраполяции
+        if self.chk_extrap.isChecked():
+            if result.line1_endpoints:
+                start1, end1 = result.line1_endpoints
+                self._add_extrapolation(overlay, start1, end1, uid1)
+            if result.line2_endpoints:
+                start2, end2 = result.line2_endpoints
+                self._add_extrapolation(overlay, start2, end2, uid2)
+        
+        # Точка пересечения
+        if result.status == IntersectionStatus.FOUND and result.intersection:
+            overlay.intersect_point = result.intersection
+        
+        return overlay
+
+    def _add_extrapolation(self, overlay: RenderOverlay, start: Composition, end: Composition, line_uid: str):
+        """Добавляет линию экстраполяции до границ треугольника"""
+        # Получаем цвет линии
+        try:
+            line = self._controller.get_line(line_uid)
+            color = line.style.color
+        except EntityNotFoundError:
+            color = "gray"
+        
+        intersections = math_utils.get_line_triangle_intersections(start, end)
+        if len(intersections) == 2:
+            overlay.extrap_lines.append(
+                OverlayLine(start=intersections[0], end=intersections[1], color=color)
+            )
+
+    def _display_result(self, result: IntersectionResult):
+        """Форматирует и отображает результат"""
+        if result.status == IntersectionStatus.FOUND:
+            comp = result.intersection
+            # Проверка на None перед доступом к атрибутам
+            if comp is None:
+                self._show_result("Intersection found but somehow composition is None.", self._STYLE_ERROR)
+                return
+                
+            names = self._controller.get_components()
+            d = DISPLAY_DECIMALS_CURSOR
+            
+            try:
+                a, b, c = comp.normalized
+                message = (
+                    f"Intersection found:\n"
+                    f"{names[0]} = {a:.{d}f}\n"
+                    f"{names[1]} = {b:.{d}f}\n"
+                    f"{names[2]} = {c:.{d}f}\n"
+                    f"{'─' * 16}\n"
+                    f"Σ = 1.0 (normalized)"
+                )
+            except Exception:
+                message = (
+                    f"Intersection found:\n"
+                    f"{names[0]} = {comp.a:.{d}f}\n"
+                    f"{names[1]} = {comp.b:.{d}f}\n"
+                    f"{names[2]} = {comp.c:.{d}f}"
+                )
+            self._show_result(message, self._STYLE_SUCCESS)
+            self.found_intersection = comp
+            self.btn_add.setEnabled(True)
+            
+        elif result.status == IntersectionStatus.OUTSIDE:
+            self._show_result("Intersection is outside the triangle.", self._STYLE_WARNING)
+            
+        elif result.status == IntersectionStatus.PARALLEL:
+            self._show_result("Lines are parallel.", self._STYLE_ERROR)
+            
+        else:
+            self._show_result("Invalid input.", self._STYLE_DEFAULT)
+
+    def _show_result(self, message: str, style: str):
+        """Устанавливает текст и стиль результата"""
+        self.lbl_result.setText(message)
+        self.lbl_result.setStyleSheet(style)
+
     def _on_close(self) -> None:
         """Обработчик закрытия — очищаем overlay"""
         self.overlay_changed.emit(RenderOverlay())  # Пустой overlay

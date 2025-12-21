@@ -1,7 +1,8 @@
 from typing import Optional, List, Dict
 import copy
 from PySide6.QtCore import QObject, Signal
-from core.models import ProjectData, NamedComposition, TieLine, Composition, CompositionUpdate, StyleUpdate, IntersectionResult, RenderOverlay, OverlayLine
+from pydantic import ValidationError as PydanticValidationError
+from core.models import ProjectData, NamedComposition, TieLine, Composition, CompositionUpdate, StyleUpdate, IntersectionResult, IntersectionStatus
 from core import math_utils
 from core.constants import EPSILON_BOUNDARY
 from core.serializer import ProjectSerializer
@@ -134,16 +135,42 @@ class ProjectController(QObject):
     
     def create_composition(self, name: str = "New", a: float = 0.0, b: float = 0.0, c: float = 0.0,
                            show_label: bool = True,
-                           show_marker: bool = True
+                           show_marker: bool = True,
+                           validate: bool = True
                            ) -> str:
         """
         Создаёт состав и возвращает его UID.
-        Не возвращает сам объект NamedComposition!
+        
+        Args:
+            name: Имя состава
+            a, b, c: Координаты
+            show_label: Показывать текстовую метку
+            show_marker: Показывать маркер
+            validate: Проверять физическую валидность (default: True)
+            
+        Returns:
+            UID созданного состава
+            
+        Raises:
+            ValidationError: если validate=True и состав невалиден
         """
-        comp = NamedComposition(
-            name=name,
-            composition=Composition(a, b, c)
-        )
+        try:
+            composition = Composition(a=a, b=b, c=c)
+            
+            if validate and not composition.is_physically_valid:
+                raise ValidationError(
+                    f"Invalid composition: normalized values ({a}, {b}, {c}) "
+                    f"must be non-negative. Check your input."
+                )
+            
+            comp = NamedComposition(
+                name=name,
+                composition=composition
+            )
+        except PydanticValidationError as e:
+            # Преобразуем ошибки Pydantic в ValidationError
+            error_msg = e.errors()[0]['msg'] if e.errors() else "Invalid composition data"
+            raise ValidationError(str(error_msg))
         # Применяем настройку видимости метки
         comp.style.show_label = show_label
         comp.style.show_marker = show_marker
@@ -165,17 +192,24 @@ class ProjectController(QObject):
             UID созданной линии
             
         Raises:
-            ValidationError: если start_uid == end_uid
+            ValidationError: если start_uid == end_uid или координаты совпадают
             DuplicateEntityError: если такая линия уже существует
             EntityNotFoundError: если один из составов не найден
         """
-        # Валидация
+        # Валидация UID
         if start_uid == end_uid:
             raise ValidationError("Cannot create line: start and end must be different")
         
-        # Проверяем существование составов (выбросит EntityNotFoundError)
-        self.get_composition(start_uid)
-        self.get_composition(end_uid)
+        # Получаем составы (выбросит EntityNotFoundError если не найден)
+        start_comp = self.get_composition(start_uid)
+        end_comp = self.get_composition(end_uid)
+        
+        # Проверка на совпадение координат (вырожденная линия)
+        if start_comp.composition.normalized_is_close(end_comp.composition):
+            raise ValidationError(
+                f"Cannot create line: compositions '{start_comp.name}' and '{end_comp.name}' "
+                f"have identical coordinates (zero-length tie-line)"
+            )
         
         # Проверка на дубликат
         for line in self._project.lines:
@@ -221,27 +255,80 @@ class ProjectController(QObject):
         self._project.is_inverted = is_inverted
         self._notify_change()
 
-    def update_composition(self, uid: str, update: CompositionUpdate) -> None:
+    def update_composition(self, uid: str, update: CompositionUpdate, validate: bool = True) -> None:
         """
         Обновляет состав, используя DTO.
         
+        Args:
+            uid: Идентификатор состава
+            update: DTO с изменениями
+            validate: Проверять физическую валидность и вырожденные линии
+            
         Raises:
             EntityNotFoundError: если состав не найден
+            ValidationError: если validate=True и новые координаты невалидны или создают вырожденную линию
         """
         comp = self.get_composition(uid)
+        
+        if validate and update.has_coordinate_changes():
+            new_a = update.a if update.a is not None else comp.composition.a
+            new_b = update.b if update.b is not None else comp.composition.b
+            new_c = update.c if update.c is not None else comp.composition.c
+            
+            try:
+                new_composition = Composition(a=new_a, b=new_b, c=new_c)
+                
+                # Проверка физической валидности
+                if not new_composition.is_physically_valid:
+                    raise ValidationError(
+                        "Invalid composition: values would result in negative molar fractions"
+                    )
+                
+                # Проверка на вырожденные линии
+                self._check_degenerate_lines(uid, new_composition)
+            except PydanticValidationError as e:
+                # Преобразуем ошибки Pydantic в ValidationError
+                error_msg = e.errors()[0]['msg'] if e.errors() else "Invalid composition data"
+                raise ValidationError(str(error_msg))
+        
         update.apply_to(comp)
         self._notify_change()
 
-    def delete_composition(self, uid: str) -> str:
+    def _check_degenerate_lines(self, composition_uid: str, new_coords: Composition) -> None:
+        """
+        Проверяет, не станут ли связанные линии вырожденными после изменения координат.
+        
+        Raises:
+            ValidationError: если изменение создаст вырожденную линию
+        """
+        for line in self._project.lines:
+            other_uid = None
+            
+            if line.start_uid == composition_uid:
+                other_uid = line.end_uid
+            elif line.end_uid == composition_uid:
+                other_uid = line.start_uid
+            
+            if other_uid:
+                try:
+                    other_comp = self.get_composition(other_uid)
+                    if new_coords.normalized_is_close(other_comp.composition):
+                        raise ValidationError(
+                            f"Cannot update: would create zero-length line with '{other_comp.name}'"
+                        )
+                except EntityNotFoundError:
+                    # Другой конец линии не существует — пропускаем
+                    pass
+
+    def delete_composition(self, uid: str) -> None:
         """
         Удаляет состав и связанные линии.
-        Возвращает имя удалённого состава для обратной связи.
         
         Raises:
             EntityNotFoundError: если состав не найден
         """
-        comp = self.get_composition(uid)
-        deleted_name = comp.name or "Unnamed"
+        # Проверяем существование (выбросит EntityNotFoundError если нет)
+        self.get_composition(uid)
         
         logger.info(f"Deleting composition: {uid}")
         
@@ -270,8 +357,6 @@ class ProjectController(QObject):
             
         # Один финальный сигнал
         self._notify_change()
-        
-        return deleted_name
 
     def _save_undo_state(self) -> None:
         """Сохраняет текущее состояние в стек отмены"""
@@ -329,42 +414,41 @@ class ProjectController(QObject):
         update.apply_to(line.style)
         self._notify_change()
 
-    def delete_line(self, uid: str) -> tuple[str, str]:
+    def delete_line(self, uid: str) -> None:
         """
         Удаляет линию.
-        Возвращает имена составов (start_name, end_name) для обратной связи.
         
         Raises:
             EntityNotFoundError: если линия не найдена
         """
-        line = self.get_line(uid)
-        
-        start_name = "?"
-        end_name = "?"
-        try:
-            start_comp = self.get_composition(line.start_uid)
-            end_comp = self.get_composition(line.end_uid)
-            start_name = start_comp.name or "Unnamed"
-            end_name = end_comp.name or "Unnamed"
-        except EntityNotFoundError:
-            pass
+        # Проверяем существование
+        self.get_line(uid)
         
         del self._line_map[uid]
         self._project.lines = [line for line in self._project.lines if line.uid != uid]
         self._notify_change()
-        
-        return start_name, end_name
 
     def update_line_endpoints(self, line_uid: str, start_uid: str, end_uid: str) -> None:
         """
         Обновляет конечные точки существующей линии, не меняя её UID.
         
         Raises:
-            ValidationError: если start == end или линия-дубликат
+            ValidationError: если start == end, координаты совпадают, или линия-дубликат
             EntityNotFoundError: если линия или составы не найдены
         """
         if start_uid == end_uid:
             raise ValidationError("Start and end must be different")
+        
+        # Получаем составы для проверки координат
+        start_comp = self.get_composition(start_uid)
+        end_comp = self.get_composition(end_uid)
+        
+        # Проверка на совпадение координат
+        if start_comp.composition.normalized_is_close(end_comp.composition):
+            raise ValidationError(
+                f"Cannot update line: compositions '{start_comp.name}' and '{end_comp.name}' "
+                f"have identical coordinates"
+            )
         
         # Проверка дубликата
         for line in self._project.lines:
@@ -415,74 +499,50 @@ class ProjectController(QObject):
         self._rebuild_cache()
         self.clear_undo_history()
 
-    def calculate_intersection(self, line1_uid: str, line2_uid: str, show_extrapolations: bool = True) -> IntersectionResult:
+    def calculate_intersection(self, line1_uid: str, line2_uid: str) -> IntersectionResult:
         """
-        Рассчитывает пересечение двух линий и возвращает результат с готовым overlay.
+        Рассчитывает пересечение двух линий.
+        
+        Возвращает только данные. UI сам строит overlay и форматирует сообщения.
+        
+        Raises:
+            EntityNotFoundError: если линия или состав не найден
+            ValidationError: если line1_uid == line2_uid
         """
-        overlay = RenderOverlay()
-        result = IntersectionResult(overlay=overlay)
+        if not line1_uid or not line2_uid:
+            return IntersectionResult(status=IntersectionStatus.INVALID_INPUT)
         
-        # 1. Валидация входных данных
-        if not line1_uid or not line2_uid or line1_uid == line2_uid:
-            result.message = "Select two different lines."
-            return result
-            
-        try:
-            line1 = self.get_line(line1_uid)
-            line2 = self.get_line(line2_uid)
-            p1, p2 = self.get_line_endpoints(line1.uid)
-            p3, p4 = self.get_line_endpoints(line2.uid)
-        except EntityNotFoundError:
-            result.message = "Invalid lines data."
-            return result
-
-        # 2. Подсветка и экстраполяция (визуал)
-        overlay.highlight_lines_uids = [line1_uid, line2_uid]
+        if line1_uid == line2_uid:
+            raise ValidationError("Cannot intersect line with itself")
         
-        if show_extrapolations:
-            # Используем вспомогательную функцию для экстраполяции
-            self._add_extrapolations(overlay, p1.composition, p2.composition, line1.style.color)
-            self._add_extrapolations(overlay, p3.composition, p4.composition, line2.style.color)
-
-        # 3. Расчёт пересечения (математика)
+        # Получаем данные (исключения пробросятся наверх)
+        p1, p2 = self.get_line_endpoints(line1_uid)
+        p3, p4 = self.get_line_endpoints(line2_uid)
+        
+        # Сохраняем endpoints для UI (построение overlay)
+        result = IntersectionResult(
+            line1_endpoints=(p1.composition, p2.composition),
+            line2_endpoints=(p3.composition, p4.composition),
+        )
+        
+        # Расчёт пересечения
         intersect = math_utils.solve_intersection(
             p1.composition, p2.composition, 
             p3.composition, p4.composition
         )
         
-        if intersect:
-            arr = intersect.normalized
-            is_inside = all(x >= -EPSILON_BOUNDARY for x in arr)
-            
-            result.intersection = intersect
-            result.is_inside = is_inside
-            
-            if is_inside:
-                overlay.intersect_point = intersect
-                names = self.get_components()
-                result.message = (
-                    f"Intersection found:\n"
-                    f"{names[0]} = {intersect.a:.4f}\n"
-                    f"{names[1]} = {intersect.b:.4f}\n"
-                    f"{names[2]} = {intersect.c:.4f}"
-                )
-                result.status_style = "color: green; font-weight: bold; background: #e0f0e0; padding: 10px;"
-            else:
-                result.message = "Intersection is outside the triangle."
-                result.status_style = "color: orange; font-weight: bold; background: #fff0e0; padding: 10px;"
-        else:
-            result.message = "Lines are parallel."
-            result.status_style = "color: red; font-weight: bold; background: #ffe0e0; padding: 10px;"
-            
+        if intersect is None:
+            result.status = IntersectionStatus.PARALLEL
+            return result
+        
+        # Проверка: внутри треугольника?
+        arr = intersect.normalized
+        is_inside = all(x >= -EPSILON_BOUNDARY for x in arr)
+        
+        result.intersection = intersect
+        result.status = IntersectionStatus.FOUND if is_inside else IntersectionStatus.OUTSIDE
+        
         return result
-
-    def _add_extrapolations(self, overlay: RenderOverlay, start: Composition, end: Composition, color: str):
-        """Helper to add extrapolation lines to overlay"""
-        intersections = math_utils.get_line_triangle_intersections(start, end)
-        if len(intersections) == 2:
-            overlay.extrap_lines.append(
-                OverlayLine(start=intersections[0], end=intersections[1], color=color)
-            )
 
     # ========== Undo/Redo МЕТОДЫ ==========
 

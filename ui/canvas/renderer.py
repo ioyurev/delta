@@ -1,5 +1,4 @@
 import matplotlib.patheffects as path_effects
-import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from core import math_utils
@@ -200,24 +199,26 @@ class ProjectRenderer:
         if step >= 1.0: 
             return
         
-        vals = np.arange(step, 1.0 - 1e-9, step)
+        # Используем генератор вместо np.arange для избежания ошибок округления
+        num_steps = int(round(1.0 / step))
+        vals = [i * step for i in range(1, num_steps)]
         
         for v in vals:
             val = float(v)
             inv_val = 1.0 - val
             
-            p1 = math_utils.bary_to_cart(Composition(val, 0.0, inv_val), is_inv)
-            p2 = math_utils.bary_to_cart(Composition(val, inv_val, 0.0), is_inv)
+            p1 = math_utils.bary_to_cart(Composition(a=val, b=0.0, c=inv_val), is_inv)
+            p2 = math_utils.bary_to_cart(Composition(a=val, b=inv_val, c=0.0), is_inv)
             self.ax.plot([p1[0], p2[0]], [p1[1], p2[1]], 
                          color='gray', alpha=0.3, linestyle='-', lw=GRID_LINE_WIDTH, zorder=ZORDER_GRID)
             
-            p3 = math_utils.bary_to_cart(Composition(0.0, val, inv_val), is_inv)
-            p4 = math_utils.bary_to_cart(Composition(inv_val, val, 0.0), is_inv)
+            p3 = math_utils.bary_to_cart(Composition(a=0.0, b=val, c=inv_val), is_inv)
+            p4 = math_utils.bary_to_cart(Composition(a=inv_val, b=val, c=0.0), is_inv)
             self.ax.plot([p3[0], p4[0]], [p3[1], p4[1]], 
                          color='gray', alpha=0.3, linestyle='-', lw=GRID_LINE_WIDTH, zorder=ZORDER_GRID)
             
-            p5 = math_utils.bary_to_cart(Composition(0.0, inv_val, val), is_inv)
-            p6 = math_utils.bary_to_cart(Composition(inv_val, 0.0, val), is_inv)
+            p5 = math_utils.bary_to_cart(Composition(a=0.0, b=inv_val, c=val), is_inv)
+            p6 = math_utils.bary_to_cart(Composition(a=inv_val, b=0.0, c=val), is_inv)
             self.ax.plot([p5[0], p6[0]], [p5[1], p6[1]], 
                          color='gray', alpha=0.3, linestyle='-', lw=GRID_LINE_WIDTH, zorder=ZORDER_GRID)
 
@@ -226,7 +227,8 @@ class ProjectRenderer:
         self.ax.text(
             0.5, TRIANGLE_HEIGHT / 2,
             "Add compositions in the right panel\n"
-            "or press Ctrl+O to open project",
+            "or press Ctrl+O to open project\n\n"
+            "Tip: Coordinates are molar fractions (auto-normalized)",
             ha='center', va='center',
             fontsize=11, color='#888888',
             style='italic',

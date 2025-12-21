@@ -4,20 +4,26 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                                QMenu, QTableWidget, QApplication)
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QBrush, QKeyEvent
-from core.models import ProjectData, CompositionUpdate
+from core.models import ProjectData, CompositionUpdate, Composition
+from core.constants import (
+    COMP_NAME_MAX_LENGTH, 
+    DISPLAY_DECIMALS_TABLE, 
+    COORD_INPUT_MIN, 
+    COORD_INPUT_MAX, 
+    TOOLTIP_COORDINATE,
+    NORMALIZATION_WARNING_THRESHOLD
+)
+import math
 
-# Маппинг колонка -> поле CompositionUpdate
 _COLUMN_TO_FIELD = {1: 'a', 2: 'b', 3: 'c'}
 
-# Цвета для подсветки (адаптивные)
 def _get_error_color() -> QColor:
     """Возвращает цвет ошибки, адаптированный к теме"""
     palette = QApplication.palette()
     base = palette.base().color()
-    # Если тёмная тема — тёмно-красный, иначе светло-красный
     if base.lightness() < 128:
-        return QColor(100, 40, 40)  # Тёмно-красный для тёмной темы
-    return QColor(255, 200, 200)  # Светло-красный для светлой темы
+        return QColor(100, 40, 40)
+    return QColor(255, 200, 200)
 
 def _get_normal_color() -> QColor:
     """Возвращает нормальный цвет фона из текущей палитры"""
@@ -25,15 +31,13 @@ def _get_normal_color() -> QColor:
 
 
 class CompositionsTable(QWidget):
-    data_changed = Signal(str, CompositionUpdate) 
-    composition_added = Signal()
-    style_request = Signal(str) 
-    composition_deleted = Signal(str)
+    composition_edited = Signal(str, CompositionUpdate) 
+    request_add_composition = Signal()
+    request_edit_style = Signal(str) 
+    request_delete_composition = Signal(str)
     components_changed = Signal(list)
     grid_changed = Signal(bool, float)
     view_mode_changed = Signal(bool)
-    
-    # Новый сигнал для сообщений
     validation_error = Signal(str)
 
     def __init__(self):
@@ -52,20 +56,21 @@ class CompositionsTable(QWidget):
         self.ed_b.setFixedWidth(40)
         self.ed_c = QLineEdit("C")
         self.ed_c.setFixedWidth(40)
-        btn_set = QPushButton("Update Names")
-        btn_set.clicked.connect(self._on_comps_update)
         
-        # Добавляем tooltips
-        self.ed_a.setToolTip("Name of component A (vertex)")
-        self.ed_b.setToolTip("Name of component B (vertex)")
-        self.ed_c.setToolTip("Name of component C (vertex)")
-        btn_set.setToolTip("Apply new component names to the diagram")
+        # ВМЕСТО КНОПКИ: Подключаем сигнал завершения редактирования
+        # Изменения применятся при нажатии Enter или потере фокуса
+        self.ed_a.editingFinished.connect(self._on_comps_update)
+        self.ed_b.editingFinished.connect(self._on_comps_update)
+        self.ed_c.editingFinished.connect(self._on_comps_update)
+        
+        self.ed_a.setToolTip("Name of component A. Press Enter to apply.")
+        self.ed_b.setToolTip("Name of component B. Press Enter to apply.")
+        self.ed_c.setToolTip("Name of component C. Press Enter to apply.")
         
         h_comp.addWidget(QLabel("Labels:"))
         h_comp.addWidget(self.ed_a)
         h_comp.addWidget(self.ed_b)
         h_comp.addWidget(self.ed_c)
-        h_comp.addWidget(btn_set)
         sys_lay.addLayout(h_comp)
         
         # View & Grid
@@ -82,7 +87,6 @@ class CompositionsTable(QWidget):
         self.sp_step.setPrefix("Step: ")
         self.sp_step.valueChanged.connect(self._on_grid_update)
         
-        # Добавляем tooltips
         self.chk_inv.setToolTip("Flip triangle upside down (vertex C at bottom)")
         self.chk_grid.setToolTip("Show/hide grid lines on the diagram")
         self.sp_step.setToolTip("Grid spacing (0.1 = 10% intervals)")
@@ -101,14 +105,14 @@ class CompositionsTable(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._on_item_changed)
         
-        # Добавляем tooltip для таблицы
-        self.table.setToolTip("Double-click cell to edit. Right-click for more options.")
-        
-        # Контекстное меню
+        # Tooltip для всей таблицы
+        self.table.setToolTip(
+            "Composition coordinates in molar fractions.\n"
+            "Values are normalized: A + B + C = 1\n"
+            "Double-click to edit. Right-click for options."
+        )
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
-        
-        # Устанавливаем фокус-политику для таблицы
         self.table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
         btn_add = QPushButton("➕ Add New Composition")
@@ -118,17 +122,80 @@ class CompositionsTable(QWidget):
                 font-weight: bold;
             }
         """)
-        btn_add.clicked.connect(self.composition_added.emit)
-        
-        # Добавляем tooltip для кнопки добавления
+        btn_add.clicked.connect(self.request_add_composition.emit)
         btn_add.setToolTip("Create a new composition point (Ctrl+click on diagram also works)")
         
         layout.addWidget(self.table)
-        layout.addWidget(btn_add)
+        
+        # --- 3. Action Buttons (NEW) ---
+        # Создаем панель кнопок, аналогичную LinesManager
+        btns_layout = QHBoxLayout()
+        
+        self.btn_add = QPushButton("➕ Add")
+        self.btn_add.clicked.connect(self.request_add_composition.emit)
+        self.btn_add.setToolTip("Create a new composition point")
+        
+        self.btn_edit = QPushButton("✏️ Edit") # Аналог Edit в линиях
+        self.btn_edit.clicked.connect(self._on_style_click)
+        self.btn_edit.setToolTip("Edit marker style (color, shape, size)")
+        
+        self.btn_del = QPushButton("🗑️ Delete")
+        self.btn_del.clicked.connect(self._on_del_click)
+        self.btn_del.setToolTip("Delete selected composition")
+        
+        btns_layout.addWidget(self.btn_add)
+        btns_layout.addWidget(self.btn_edit)
+        btns_layout.addWidget(self.btn_del)
+        
+        layout.addLayout(btns_layout)
         
         self._block_signals = False
         self._row_to_uid: dict[int, str] = {}
-        self._previous_values: dict[tuple[int, int], str] = {}  # Кэш предыдущих значений
+        self._previous_values: dict[tuple[int, int], str] = {}
+
+    def _is_row_valid(self, row: int) -> bool:
+        """Проверяет, валидны ли координаты в строке"""
+        try:
+            item_a = self.table.item(row, 1)
+            item_b = self.table.item(row, 2)
+            item_c = self.table.item(row, 3)
+            
+            if not item_a or not item_b or not item_c:
+                return False
+                
+            a = float(item_a.text().replace(',', '.'))
+            b = float(item_b.text().replace(',', '.'))
+            c = float(item_c.text().replace(',', '.'))
+            
+            comp = Composition(a=a, b=b, c=c)
+            return comp.is_physically_valid
+        except (ValueError, AttributeError):
+            return False
+
+    def _get_normalization_status(self, composition) -> tuple[bool, str]:
+        """
+        Проверяет, требуется ли нормализация для состава.
+        
+        Returns:
+            (needs_warning, tooltip_text)
+        """
+        total = composition.total
+        
+        if abs(total) < 1e-9:
+            return True, "⚠ Sum ≈ 0 (invalid composition)"
+        
+        if abs(total - 1.0) > NORMALIZATION_WARNING_THRESHOLD:
+            try:
+                a, b, c = composition.normalized
+                return True, (
+                    f"⚠ Input sum = {total:.4f} (not normalized)\n"
+                    f"Normalized values: {a:.4f}, {b:.4f}, {c:.4f}\n"
+                    f"Calculations use normalized values (sum = 1)"
+                )
+            except Exception:
+                return True, "⚠ Cannot normalize composition"
+        
+        return False, "Values are normalized (sum ≈ 1)"
 
     def update_view(self, project_data: ProjectData) -> None:
         self.ed_a.setText(project_data.components[0])
@@ -158,18 +225,36 @@ class CompositionsTable(QWidget):
             for _ in range(current_rows - target_rows):
                 self.table.removeRow(self.table.rowCount() - 1)
         
-        self.table.setHorizontalHeaderLabels(["Name"] + list(project_data.components))
+        # Устанавливаем заголовки
+        headers = ["Name"] + list(project_data.components)
+        self.table.setHorizontalHeaderLabels(headers)
+        
+        # Добавляем tooltips к заголовкам
+        name_header = self.table.horizontalHeaderItem(0)
+        if name_header:
+            name_header.setToolTip("Composition name (identifier)")
+        
+        for col in range(1, 4):
+            header_item = self.table.horizontalHeaderItem(col)
+            if header_item:
+                header_item.setToolTip(TOOLTIP_COORDINATE)
+        
         self._row_to_uid = {}
-        self._previous_values = {}  # Очищаем кэш
+        self._previous_values = {}
         
         for i, p in enumerate(project_data.compositions):
             self._row_to_uid[i] = p.uid
             
+            # Проверяем статус нормализации
+            needs_warning, norm_tooltip = self._get_normalization_status(p.composition)
+            
+            # Используем константу для точности отображения
+            d = DISPLAY_DECIMALS_TABLE
             vals = [
                 p.name,
-                f"{p.composition.a:.4f}",
-                f"{p.composition.b:.4f}",
-                f"{p.composition.c:.4f}"
+                f"{p.composition.a:.{d}f}",
+                f"{p.composition.b:.{d}f}",
+                f"{p.composition.c:.{d}f}"
             ]
             
             for col, val in enumerate(vals):
@@ -181,16 +266,33 @@ class CompositionsTable(QWidget):
                 if item.text() != val:
                     item.setText(val)
                 
-                # Сохраняем текущее значение как "предыдущее"
                 self._previous_values[(i, col)] = val
                 
-                # Сбрасываем фон на нормальный
-                item.setBackground(QBrush(_get_normal_color()))
+                # Устанавливаем фон и tooltip в зависимости от статуса
+                if col > 0:  # Только для координатных ячеек
+                    if needs_warning:
+                        # Бледно-жёлтый фон для ненормализованных
+                        item.setBackground(QBrush(QColor(255, 255, 200)))
+                        item.setToolTip(norm_tooltip)
+                    else:
+                        item.setBackground(QBrush(_get_normal_color()))
+                        item.setToolTip(TOOLTIP_COORDINATE)
+                else:
+                    item.setBackground(QBrush(_get_normal_color()))
+        
+        # После заполнения — проверяем валидность и подсвечиваем
+        for i, p in enumerate(project_data.compositions):
+            if not p.composition.is_physically_valid:
+                # Подсвечиваем всю строку бледно-красным
+                for col in range(4):
+                    item = self.table.item(i, col)
+                    if item:
+                        item.setBackground(QBrush(QColor(255, 230, 230)))
+                        item.setToolTip("Warning: Composition has negative molar fractions")
                 
         self._block_signals = False
 
     def select_composition(self, uid: str) -> None:
-        """Выделяет строку с указанным составом и прокручивает к ней"""
         for row, row_uid in self._row_to_uid.items():
             if row_uid == uid:
                 self.table.selectRow(row)
@@ -215,10 +317,8 @@ class CompositionsTable(QWidget):
         txt = item.text().strip()
         key = (item.row(), col)
         
-        # Колонка 0 — имя (валидация не нужна)
         if col == 0:
             if not txt:
-                # Пустое имя → восстановить предыдущее или "Unnamed"
                 prev = self._previous_values.get(key, "Unnamed")
                 self._show_validation_error(item, f"Name cannot be empty, restored '{prev}'")
                 self._block_signals = True
@@ -227,15 +327,13 @@ class CompositionsTable(QWidget):
                 return
             
             self._previous_values[key] = txt
-            self.data_changed.emit(uid, CompositionUpdate(name=txt[:100]))
+            self.composition_edited.emit(uid, CompositionUpdate(name=txt[:COMP_NAME_MAX_LENGTH]))
             return
         
-        # Колонки 1-3 — координаты
         field = _COLUMN_TO_FIELD.get(col)
         if not field:
             return
         
-        # Пытаемся распарсить число
         try:
             val = float(txt.replace(',', '.'))
         except ValueError:
@@ -246,48 +344,67 @@ class CompositionsTable(QWidget):
             self._block_signals = False
             return
         
-        # Проверка на отрицательное
-        if val < 0:
-            self._show_validation_error(item, "Negative values not allowed, using 0.0")
-            val = 0.0
+        if val < COORD_INPUT_MIN:
+            self._show_validation_error(item, f"Value must be ≥ {COORD_INPUT_MIN}, using {COORD_INPUT_MIN}")
+            val = COORD_INPUT_MIN
             self._block_signals = True
-            item.setText("0.0000")
+            item.setText(f"{COORD_INPUT_MIN:.{DISPLAY_DECIMALS_TABLE}f}")
             self._block_signals = False
         
-        # Проверка на слишком большое значение
-        if val > 1000:
-            self._show_validation_error(item, "Value too large, clamped to 1000")
-            val = 1000.0
+        if val > COORD_INPUT_MAX:
+            self._show_validation_error(item, f"Value must be ≤ {COORD_INPUT_MAX}, clamped")
+            val = COORD_INPUT_MAX
             self._block_signals = True
-            item.setText("1000.0000")
+            item.setText(f"{COORD_INPUT_MAX:.{DISPLAY_DECIMALS_TABLE}f}")
             self._block_signals = False
         
-        # Обновляем кэш
         self._previous_values[key] = item.text()
+        self.composition_edited.emit(uid, CompositionUpdate.coordinate(field, val))
         
-        self.data_changed.emit(uid, CompositionUpdate.coordinate(field, val))
+        # Проверяем сумму после изменения и показываем предупреждение
+        self._check_row_normalization(item.row())
 
     def _show_validation_error(self, item: QTableWidgetItem, message: str):
-        """Показывает ошибку валидации"""
-        # 1. Подсвечиваем ячейку красным
         item.setBackground(QBrush(_get_error_color()))
-        
-        # 2. Испускаем сигнал для StatusBar
         self.validation_error.emit(message)
-        
-        # 3. Через 2 секунды убираем подсветку
         QTimer.singleShot(2000, lambda: self._reset_cell_background(item))
 
     def _reset_cell_background(self, item: QTableWidgetItem):
-        """Сбрасывает фон ячейки на нормальный"""
         try:
             item.setBackground(QBrush(_get_normal_color()))
         except RuntimeError:
-            # Ячейка могла быть удалена
             pass
 
+    def _check_row_normalization(self, row: int):
+        """Проверяет нормализацию строки и показывает предупреждение если нужно"""
+        try:
+            item_a = self.table.item(row, 1)
+            item_b = self.table.item(row, 2)
+            item_c = self.table.item(row, 3)
+            
+            if not item_a or not item_b or not item_c:
+                return
+                
+            a = float(item_a.text().replace(',', '.'))
+            b = float(item_b.text().replace(',', '.'))
+            c = float(item_c.text().replace(',', '.'))
+        except (ValueError, AttributeError):
+            return
+        
+        total = math.fsum([a, b, c])
+        
+        if abs(total) < 1e-9:
+            self.validation_error.emit("Warning: Sum ≈ 0 (invalid composition)")
+            return
+        
+        if abs(total - 1.0) > NORMALIZATION_WARNING_THRESHOLD:
+            # Вычисляем нормализованные значения
+            na, nb, nc = a / total, b / total, c / total
+            self.validation_error.emit(
+                f"Note: Sum = {total:.3f}. Normalized: {na:.3f} : {nb:.3f} : {nc:.3f}"
+            )
+
     def _on_context_menu(self, position):
-        """Обработчик ПКМ по таблице"""
         item = self.table.itemAt(position)
         if item:
             row = item.row()
@@ -295,29 +412,27 @@ class CompositionsTable(QWidget):
             
             menu = QMenu()
             
-            action_style = QAction("Customize Marker...", self)
-            action_style.triggered.connect(lambda: self.style_request.emit(uid))
+            action_style = QAction("✏️ Edit Style...", self)
+            action_style.triggered.connect(lambda: self.request_edit_style.emit(uid))
             menu.addAction(action_style)
             
             menu.addSeparator()
 
             action_del = QAction("Delete Composition", self)
-            action_del.triggered.connect(lambda: self.composition_deleted.emit(uid))
+            action_del.triggered.connect(lambda: self.request_delete_composition.emit(uid))
             menu.addAction(action_del)
             
             menu.exec(self.table.viewport().mapToGlobal(position))
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Обработка нажатий клавиш"""
         if event.key() == Qt.Key.Key_Delete:
             item = self.table.currentItem()
             if item:
                 uid = self._row_to_uid.get(item.row())
                 if uid:
-                    self.composition_deleted.emit(uid)
+                    self.request_delete_composition.emit(uid)
                     return
         
-        # F2 — редактирование текущей ячейки
         if event.key() == Qt.Key.Key_F2:
             item = self.table.currentItem()
             if item:
@@ -325,3 +440,22 @@ class CompositionsTable(QWidget):
                 return
         
         super().keyPressEvent(event)
+
+    # НОВЫЕ СЛОТЫ ДЛЯ КНОПОК
+    def _on_style_click(self):
+        item = self.table.currentItem()
+        if item:
+            uid = self._row_to_uid.get(item.row())
+            if uid:
+                self.request_edit_style.emit(uid)
+        else:
+            self.validation_error.emit("Select a composition to style")
+
+    def _on_del_click(self):
+        item = self.table.currentItem()
+        if item:
+            uid = self._row_to_uid.get(item.row())
+            if uid:
+                self.request_delete_composition.emit(uid)
+        else:
+            self.validation_error.emit("Select a composition to delete")

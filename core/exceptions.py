@@ -32,3 +32,24 @@ class ValidationError(DeltaError, ValueError):
     """Невалидные входные данные"""
     def __init__(self, message: str):
         super().__init__(message)
+
+
+class CalculationError(DeltaError):
+    """Базовое исключение для ошибок расчёта"""
+    pass
+
+
+class DegenerateBasisError(CalculationError):
+    """Вырожденный базис (точки совпадают или коллинеарны)"""
+    
+    def __init__(self, reason: str = "Basis points are coincident or collinear"):
+        self.reason = reason
+        super().__init__(reason)
+
+
+class DegenerateTriangleError(CalculationError):
+    """Вырожденный треугольник (три точки коллинеарны)"""
+    
+    def __init__(self, reason: str = "Triangle is degenerate (collinear vertices)"):
+        self.reason = reason
+        super().__init__(reason)

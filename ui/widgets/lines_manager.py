@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
-                               QPushButton, QListWidget, QListWidgetItem)
+                               QPushButton, QListWidget, QListWidgetItem, QMenu)
 from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QKeyEvent, QAction
 from core.models import ProjectData
 
 class LinesManager(QWidget):
@@ -26,13 +26,17 @@ class LinesManager(QWidget):
         # Устанавливаем фокус-политику для списка
         self.list_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
+        # ВКЛЮЧАЕМ КОНТЕКСТНОЕ МЕНЮ
+        self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self._on_context_menu)
+        
         l_man.addWidget(self.list_widget)
         
         # Добавляем tooltip для списка линий
-        self.list_widget.setToolTip("Double-click to edit line. Select and press Delete to remove.")
+        self.list_widget.setToolTip("Double-click to edit line. Select and press Delete to remove. Right-click for more options.")
         
         btns = QHBoxLayout()
-        btn_add = QPushButton("➕ Create")
+        btn_add = QPushButton("➕ Add")
         btn_add.clicked.connect(self.request_add_line.emit)
         btn_edit = QPushButton("✏️ Edit")
         btn_edit.clicked.connect(self._on_edit_click)
@@ -53,20 +57,20 @@ class LinesManager(QWidget):
         layout.addWidget(gb_man, stretch=1)
 
         # 2. Большая кнопка Калькулятора (ВМЕСТО старого виджета)
-        btn_calc = QPushButton("📐 Intersection Calculator")
-        btn_calc.setStyleSheet("""
+        self.btn_calc = QPushButton("📐 Intersection Calculator")
+        self.btn_calc.setStyleSheet("""
             QPushButton {
                 font-size: 13px;
                 padding: 10px;
                 font-weight: bold;
             }
         """)
-        btn_calc.clicked.connect(self.request_calc_dialog.emit)
+        self.btn_calc.clicked.connect(self.request_calc_dialog.emit)
         
         # Добавляем tooltip для кнопки калькулятора
-        btn_calc.setToolTip("Calculate intersection point of two lines")
+        self.btn_calc.setToolTip("Calculate intersection point of two lines")
         
-        layout.addWidget(btn_calc)
+        layout.addWidget(self.btn_calc)
         
         self._current_lines = []
 
@@ -81,6 +85,9 @@ class LinesManager(QWidget):
             item = QListWidgetItem(f"{n1} — {n2}")
             item.setData(Qt.ItemDataRole.UserRole, line.uid)  # Сохраняем UID в элементе
             self.list_widget.addItem(item)
+
+        # Блокировка кнопки калькулятора, если линий < 2
+        self.btn_calc.setEnabled(len(project_data.lines) >= 2)
 
     def _on_edit_click(self):
         item = self.list_widget.currentItem()
@@ -113,3 +120,23 @@ class LinesManager(QWidget):
                     return
         
         super().keyPressEvent(event)
+
+    # НОВЫЙ МЕТОД: КОНТЕКСТНОЕ МЕНЮ
+    def _on_context_menu(self, pos):
+        item = self.list_widget.itemAt(pos)
+        if item:
+            uid = item.data(Qt.ItemDataRole.UserRole)
+            
+            menu = QMenu()
+            
+            action_edit = QAction("✏️ Edit Line...", self)
+            action_edit.triggered.connect(lambda: self.request_edit_line.emit(uid))
+            menu.addAction(action_edit)
+            
+            menu.addSeparator()
+            
+            action_del = QAction("🗑️ Delete Line", self)
+            action_del.triggered.connect(lambda: self.request_delete_line.emit(uid))
+            menu.addAction(action_del)
+            
+            menu.exec(self.list_widget.mapToGlobal(pos))

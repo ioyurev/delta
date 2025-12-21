@@ -24,7 +24,7 @@ class LineDialog(BaseFormDialog[LineDialogResult]):
         self._line_uid = current_line.uid if current_line else None
         self._initial_style = (
             current_line.style if current_line 
-            else VisualStyle(color="#1f77b4", size=2.0, line_style="-")
+            else VisualStyle()
         )
         super().__init__("Line Settings", width=350, parent=parent)
     

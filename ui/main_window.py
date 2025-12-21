@@ -9,8 +9,9 @@ from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from core.project_controller import ProjectController
 from core.utils import resource_path
 from core.serializer import ProjectFileError
-from core.exceptions import DuplicateEntityError, ValidationError
+from core.exceptions import DuplicateEntityError, ValidationError, EntityNotFoundError
 from core.models import RenderOverlay, Composition, CompositionUpdate, StyleUpdate
+from core.constants import DISPLAY_DECIMALS_CURSOR
 from core.version import get_app_version
 
 from ui.canvas import PlotCanvas
@@ -23,7 +24,7 @@ from ui.widgets.intersection_dialog import IntersectionDialog
 from ui.widgets.analysis_panel import AnalysisPanel
 from ui.widgets.about_dialog import AboutDialog
 from ui.widgets.docs_viewer import DocsViewer
-from ui.widgets.helpers import handle_entity_errors, build_menu, wait_cursor
+from ui.widgets.helpers import handle_entity_errors, build_menu, wait_cursor, get_overlay_style
 
 
 class MainWindow(QMainWindow):
@@ -147,11 +148,11 @@ class MainWindow(QMainWindow):
         # Toolbar
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         for action in self.toolbar.actions():
-            if action.text() in ("Subplots", "Customize", "Save"):
+            if action.text() in ("Subplots", "Customize", "Save", "Back", "Forward"):
                 action.setVisible(False)
         
         # Добавляем tooltip для элементов тулбара
-        self.toolbar.setToolTip("Navigation tools: Pan, Zoom, Home, Back/Forward")
+        self.toolbar.setToolTip("Navigation tools: Pan, Zoom, Home")
         
         layout.addWidget(self.toolbar)
         layout.addWidget(self.canvas_view)
@@ -182,22 +183,14 @@ class MainWindow(QMainWindow):
     def _init_overlay(self):
         """Создаёт оверлей с координатами"""
         self.coord_overlay = QLabel(self.canvas)
-        self.coord_overlay.setStyleSheet("""
-            QLabel {
-                background-color: rgba(255, 255, 255, 0.85); 
-                border: 1px solid #aaa; 
-                border-radius: 4px;
-                padding: 6px;
-                font-family: monospace;
-                font-weight: bold;
-                font-size: 12px;
-                color: #333;
-            }
-        """)
+        self.coord_overlay.setStyleSheet(get_overlay_style())
         self.coord_overlay.hide()
         
         # Добавляем tooltip для координатного оверлея
-        self.coord_overlay.setToolTip("Current cursor position in barycentric coordinates")
+        self.coord_overlay.setToolTip(
+            "Cursor position in molar fractions\n"
+            "(barycentric coordinates, normalized)"
+        )
 
     def _init_default_data(self):
         """Создаёт дефолтные вершины треугольника"""
@@ -222,13 +215,13 @@ class MainWindow(QMainWindow):
         self.canvas.vertex_label_dropped.connect(self.controller.set_vertex_label_pos)
         
         # Compositions Table
-        self.table_widget.composition_added.connect(self._on_composition_added)
-        self.table_widget.data_changed.connect(self._on_comp_edited)
+        self.table_widget.request_add_composition.connect(self._on_composition_added)
+        self.table_widget.composition_edited.connect(self._on_comp_edited)
         self.table_widget.components_changed.connect(self._on_comps_changed)
         self.table_widget.grid_changed.connect(self._on_grid_changed)
         self.table_widget.view_mode_changed.connect(self._on_view_changed)
-        self.table_widget.style_request.connect(self._on_comp_style_req)
-        self.table_widget.composition_deleted.connect(self._on_comp_delete_req)
+        self.table_widget.request_edit_style.connect(self._on_comp_style_req)
+        self.table_widget.request_delete_composition.connect(self._on_comp_delete_req)
         self.table_widget.validation_error.connect(self._on_validation_error)
         
         # Lines Manager
@@ -242,8 +235,10 @@ class MainWindow(QMainWindow):
         self.analysis_widget.overlay_changed.connect(self._on_overlay_only_update)
 
     def _on_validation_error(self, message: str):
-        """Показывает ошибку валидации в StatusBar"""
-        self.statusBar().showMessage(f"⚠ {message}", 4000)
+        """Показывает ошибку/предупреждение валидации в StatusBar"""
+        # Для заметок (Note:) показываем дольше
+        timeout = 5000 if message.startswith("Note:") else 4000
+        self.statusBar().showMessage(f"⚠ {message}", timeout)
 
     # =========================================================================
     # ОБРАБОТЧИКИ: ДАННЫЕ И ОТРИСОВКА
@@ -276,7 +271,27 @@ class MainWindow(QMainWindow):
             return
 
         names = self.controller.get_components()
-        text = f"{names[0]}: {comp.a:.4f}\n{names[1]}: {comp.b:.4f}\n{names[2]}: {comp.c:.4f}"
+        d = DISPLAY_DECIMALS_CURSOR
+        
+        # Получаем нормализованные значения
+        try:
+            a, b, c = comp.normalized
+            text = (
+                f"Molar fractions:\n"
+                f"{'─' * 14}\n"
+                f"{names[0]}: {a:.{d}f}\n"
+                f"{names[1]}: {b:.{d}f}\n"
+                f"{names[2]}: {c:.{d}f}\n"
+                f"{'─' * 14}\n"
+                f"Σ = 1.0"
+            )
+        except Exception:
+            # Fallback для невалидных составов
+            text = (
+                f"{names[0]}: {comp.a:.{d}f}\n"
+                f"{names[1]}: {comp.b:.{d}f}\n"
+                f"{names[2]}: {comp.c:.{d}f}"
+            )
         
         self.coord_overlay.setText(text)
         self.coord_overlay.adjustSize()
@@ -292,7 +307,12 @@ class MainWindow(QMainWindow):
 
     @handle_entity_errors
     def _on_comp_edited(self, uid: str, update: CompositionUpdate) -> None:
-        self.controller.update_composition(uid, update)
+        try:
+            self.controller.update_composition(uid, update)
+        except ValidationError as e:
+            self.statusBar().showMessage(f"⚠ {e}", 4000)
+            # Перерисовываем таблицу чтобы вернуть старые значения
+            self._refresh_ui()
 
     @handle_entity_errors
     def _on_comp_style_req(self, uid: str):
@@ -311,8 +331,12 @@ class MainWindow(QMainWindow):
 
     @handle_entity_errors
     def _on_comp_delete_req(self, uid: str):
-        deleted_name = self.controller.delete_composition(uid)
-        self.statusBar().showMessage(f"Deleted '{deleted_name}'", 3000)
+        # Получаем имя ДО удаления
+        comp = self.controller.get_composition(uid)
+        name = comp.name or "Unnamed"
+        
+        self.controller.delete_composition(uid)
+        self.statusBar().showMessage(f"Deleted '{name}'", 3000)
 
     @handle_entity_errors
     def _on_label_drop(self, uid: str, x: float, y: float):
@@ -331,8 +355,15 @@ class MainWindow(QMainWindow):
 
     @handle_entity_errors
     def _on_line_del_req(self, uid: str):
-        start_name, end_name = self.controller.delete_line(uid)
-        self.statusBar().showMessage(f"Deleted line '{start_name}' — '{end_name}'", 3000)
+        # Получаем имена ДО удаления
+        try:
+            start_comp, end_comp = self.controller.get_line_endpoints(uid)
+            line_name = f"'{start_comp.name}' — '{end_comp.name}'"
+        except EntityNotFoundError:
+            line_name = "line"
+        
+        self.controller.delete_line(uid)
+        self.statusBar().showMessage(f"Deleted {line_name}", 3000)
 
     def _on_intersection_found(self, composition: Composition):
         uid = self.controller.create_composition(
@@ -565,7 +596,7 @@ class MainWindow(QMainWindow):
 
     def _on_delete_selected(self):
         """Удаляет выбранный элемент (состав или линию)"""
-        # Проверяем фокус на таблице составов
+        # 1. Проверяем фокус на таблице Compositions (вкладка 1)
         if self.table_widget.table.hasFocus():
             item = self.table_widget.table.currentItem()
             if item:
@@ -574,7 +605,7 @@ class MainWindow(QMainWindow):
                     self._on_comp_delete_req(uid)
                     return
         
-        # Проверяем фокус на списке линий
+        # 2. Проверяем фокус на списке Lines (вкладка 2)
         if self.lines_widget.list_widget.hasFocus():
             list_item = self.lines_widget.list_widget.currentItem()
             if list_item:
@@ -582,5 +613,11 @@ class MainWindow(QMainWindow):
                 if uid:
                     self._on_line_del_req(uid)
                     return
+
+        # 3. (ВАЖНО) Если фокус внутри Analysis Panel (Manual Input Table),
+        # мы НЕ должны удалять никаких глобальных сущностей.
+        # QTableWidget сам обработает Delete для очистки ячейки.
+        if self.analysis_widget.table_manual.hasFocus():
+            return
         
         self.statusBar().showMessage("Nothing selected to delete", 2000)
