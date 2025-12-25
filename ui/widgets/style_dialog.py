@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QFormLayout, QComboBox, QCheckBox, QGroupBox, QVBoxLayout
 from ui.widgets.helpers import create_marker_size_spin, ColorPickerButton
 from ui.widgets.base_dialog import BaseFormDialog
-from core.models import NamedComposition
+from delta.models import NamedComposition
 from dataclasses import dataclass
 
 

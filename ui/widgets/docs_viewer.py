@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QTabWidget, QTextBrowser,
                                QPushButton, QHBoxLayout)
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
-from core.utils import resource_path
+from delta.utils import resource_path
 
 
 class DocsViewer(QDialog):

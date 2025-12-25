@@ -1,7 +1,7 @@
 import sys
 from PySide6.QtWidgets import QApplication
 from ui.main_window import MainWindow
-from core.logger import setup_logger
+from delta.logger import setup_logger
 from loguru import logger
 
 try:
@@ -17,7 +17,8 @@ def exception_hook(exc_type, exc_value, exc_traceback):
     sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
 
-if __name__ == "__main__":
+def main():
+    """Точка входа для консольной команды"""
     setup_logger()  # Настраиваем loguru
     
     # Подключаем перехватчик
@@ -37,3 +38,7 @@ if __name__ == "__main__":
     # Также можно обернуть запуск в catch на всякий случай
     with logger.catch():
         sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

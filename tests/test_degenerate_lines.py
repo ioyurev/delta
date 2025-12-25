@@ -1,6 +1,6 @@
 import pytest
-from core.project_controller import ProjectController
-from core.exceptions import ValidationError
+from delta.project_controller import ProjectController
+from delta.exceptions import ValidationError
 
 class TestDegenerateLines:
     
@@ -38,7 +38,7 @@ class TestDegenerateLines:
         self.controller.create_line(uid1, uid2)
         
         # Пытаемся изменить B чтобы координаты совпали с A
-        from core.models import CompositionUpdate
+        from delta.models import CompositionUpdate
         update = CompositionUpdate(a=0.5, b=0.3, c=0.2)
         
         with pytest.raises(ValidationError, match="zero-length line"):
@@ -78,7 +78,7 @@ class TestDegenerateLines:
         self.controller.create_line(uid1, uid2)
         
         # Меняем только имя
-        from core.models import CompositionUpdate
+        from delta.models import CompositionUpdate
         update = CompositionUpdate(name="A_new")
         
         # Это должно пройти без ошибок

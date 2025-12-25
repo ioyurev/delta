@@ -4,10 +4,10 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QSizePolicy
 from typing import Optional, Any
 
-from core.models import Composition, RenderOverlay, ProjectData
+from delta.models import Composition, RenderOverlay, ProjectData
 
-from .renderer import ProjectRenderer
-from .interactor import CanvasInteractor
+from delta.renderer import ProjectRenderer
+from ui.canvas.interactor import CanvasInteractor
 
 
 class PlotCanvas(FigureCanvasQTAgg):
@@ -104,9 +104,16 @@ class PlotCanvas(FigureCanvasQTAgg):
             self.blit(self.ax.bbox)
 
     def export_image(self, filename: str) -> None:
+        """Экспортирует текущее состояние в файл"""
+        from delta.export import render_to_file
+        
         if self.current_project:
-            self.project_renderer.draw_static_project(self.current_project)
-            self.fig.savefig(filename, bbox_inches='tight')
+            render_to_file(
+                project_data=self.current_project,
+                filepath=filename,
+                dpi=150,
+                figsize=(8, 7)
+            )
 
     # === Blitting Helpers ===
 

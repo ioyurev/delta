@@ -1,4 +1,3 @@
-# core/version.py
 from importlib.metadata import version, PackageNotFoundError
 
 def get_app_version() -> str:

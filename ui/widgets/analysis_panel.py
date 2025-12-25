@@ -4,10 +4,10 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QLabel,
                                QTableWidgetItem, QHeaderView, QApplication)
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QBrush
-from core.models import Composition, RenderOverlay, OverlayLine, NamedComposition, CompositionError
-from core import math_utils
-from core.exceptions import DegenerateBasisError, DegenerateTriangleError
-from core.constants import (
+from delta.models import Composition, RenderOverlay, OverlayLine, NamedComposition, CompositionError
+from delta import math_utils
+from delta.exceptions import DegenerateBasisError, DegenerateTriangleError
+from delta.constants import (
     EPSILON_ZERO,
     EPSILON_SEGMENT,
     TOLERANCE_ON_LINE_STRICT,
@@ -20,8 +20,8 @@ from typing import Optional, TYPE_CHECKING
 import math
 
 if TYPE_CHECKING:
-    from core.project_controller import ProjectController
-from ui.widgets.helpers import populate_combo, STYLE_MESSAGE_SUCCESS, STYLE_MESSAGE_WARNING, STYLE_MESSAGE_ERROR, STYLE_MESSAGE_DEFAULT, get_message_style
+    from delta.project_controller import ProjectController
+from ui.widgets.helpers import populate_combo, STYLE_MESSAGE_WARNING, STYLE_MESSAGE_ERROR, get_message_style
 
 
 def _get_error_color() -> QColor:

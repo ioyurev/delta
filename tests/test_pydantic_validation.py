@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError as PydanticValidationError
-from core.models import Composition, NamedComposition, TieLine, ProjectData, VisualStyle
+from delta.models import Composition, NamedComposition, TieLine, ProjectData, VisualStyle
 
 
 class TestCompositionValidation:

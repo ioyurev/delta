@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QCursor, QPalette
 from typing import Callable, Optional, TypeVar, ParamSpec, Sequence
 from functools import wraps
 from contextlib import contextmanager
-from core.constants import (
+from delta.constants import (
     MARKER_SIZE_MIN,
     MARKER_SIZE_MAX,
     MARKER_SIZE_DEFAULT,
@@ -14,7 +14,7 @@ from core.constants import (
     LINE_WIDTH_MAX,
     LINE_WIDTH_DEFAULT
 )
-from core.exceptions import EntityNotFoundError
+from delta.exceptions import EntityNotFoundError
 
 P = ParamSpec('P')
 T = TypeVar('T')

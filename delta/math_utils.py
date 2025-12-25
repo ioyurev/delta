@@ -4,16 +4,16 @@ from typing import Tuple, Optional, List
 from fractions import Fraction
 from math import gcd
 from functools import reduce
-from core.models import Composition, CompositionError
-from core.exceptions import DegenerateBasisError, DegenerateTriangleError
-from core.constants import (
+from delta.models import Composition, CompositionError
+from delta.exceptions import DegenerateBasisError, DegenerateTriangleError
+from delta.constants import (
     EPSILON_ZERO,
     EPSILON_BOUNDARY,
     RATIO_MAX_DENOMINATOR,
     RATIO_TOLERANCE,
     TOLERANCE_ON_LINE_STRICT,
 )
-from core.constants import TRIANGLE_HEIGHT as H
+from delta.constants import TRIANGLE_HEIGHT as H
 from loguru import logger  # <--- Импорт
 
 def _check_finite(value: float, name: str) -> None:

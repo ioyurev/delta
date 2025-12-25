@@ -4,8 +4,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                                QMenu, QTableWidget, QApplication)
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QBrush, QKeyEvent
-from core.models import ProjectData, CompositionUpdate, Composition
-from core.constants import (
+from delta.models import ProjectData, CompositionUpdate, Composition
+from ui.widgets.helpers import get_cell_highlight_color
+from delta.constants import (
     COMP_NAME_MAX_LENGTH, 
     DISPLAY_DECIMALS_TABLE, 
     COORD_INPUT_MIN, 
@@ -271,8 +272,8 @@ class CompositionsTable(QWidget):
                 # Устанавливаем фон и tooltip в зависимости от статуса
                 if col > 0:  # Только для координатных ячеек
                     if needs_warning:
-                        # Бледно-жёлтый фон для ненормализованных
-                        item.setBackground(QBrush(QColor(255, 255, 200)))
+                        # Адаптивный жёлтый фон для ненормализованных
+                        item.setBackground(QBrush(get_cell_highlight_color("warning")))
                         item.setToolTip(norm_tooltip)
                     else:
                         item.setBackground(QBrush(_get_normal_color()))
@@ -283,11 +284,11 @@ class CompositionsTable(QWidget):
         # После заполнения — проверяем валидность и подсвечиваем
         for i, p in enumerate(project_data.compositions):
             if not p.composition.is_physically_valid:
-                # Подсвечиваем всю строку бледно-красным
+                # Подсвечиваем всю строку адаптивным красным
                 for col in range(4):
                     item = self.table.item(i, col)
                     if item:
-                        item.setBackground(QBrush(QColor(255, 230, 230)))
+                        item.setBackground(QBrush(get_cell_highlight_color("invalid")))
                         item.setToolTip("Warning: Composition has negative molar fractions")
                 
         self._block_signals = False

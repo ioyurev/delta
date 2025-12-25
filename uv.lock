@@ -106,14 +106,18 @@ wheels = [
 
 [[package]]
 name = "delta"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "loguru" },
-    { name = "markdown" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+gui = [
+    { name = "markdown" },
     { name = "pyside6" },
 ]
 
@@ -128,12 +132,13 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
-    { name = "markdown", specifier = ">=3.10" },
+    { name = "markdown", marker = "extra == 'gui'", specifier = ">=3.10" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numpy", specifier = ">=2.3.5" },
     { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "pyside6", specifier = ">=6.10.1" },
+    { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.10.1" },
 ]
+provides-extras = ["gui"]
 
 [package.metadata.requires-dev]
 dev = [

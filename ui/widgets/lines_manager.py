@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                                QPushButton, QListWidget, QListWidgetItem, QMenu)
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QKeyEvent, QAction
-from core.models import ProjectData
+from delta.models import ProjectData
 
 class LinesManager(QWidget):
     request_add_line = Signal()

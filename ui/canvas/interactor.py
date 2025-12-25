@@ -1,7 +1,7 @@
 from PySide6.QtCore import QObject, Signal
 from matplotlib.backend_bases import MouseEvent
-from core import math_utils
-from core.models import Composition
+from delta import math_utils
+from delta.models import Composition
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

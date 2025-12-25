@@ -13,7 +13,7 @@ from typing import List, Tuple, Optional, Dict
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from core.constants import (
+from delta.constants import (
     EPSILON_ZERO,
     EPSILON_BOUNDARY,
     COMPOSITION_COMPARISON_ATOL,
@@ -200,7 +200,7 @@ class NamedComposition(BaseModel):
     @classmethod
     def validate_name(cls, v: str) -> str:
         """Ограничение длины имени"""
-        from core.constants import COMP_NAME_MAX_LENGTH
+        from delta.constants import COMP_NAME_MAX_LENGTH
         return v[:COMP_NAME_MAX_LENGTH] if v else "Unnamed"
 
 

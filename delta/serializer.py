@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from pydantic import ValidationError as PydanticValidationError
 
-from core.models import ProjectData
+from delta.models import ProjectData
 from loguru import logger
 
 

@@ -1,11 +1,11 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
                                QComboBox, QPushButton, QCheckBox, QLabel, QGroupBox)
 from PySide6.QtCore import Signal
-from core.models import RenderOverlay, Composition, TieLine, IntersectionStatus, OverlayLine, IntersectionResult
-from core.project_controller import ProjectController
-from core.exceptions import EntityNotFoundError, ValidationError
-from core import math_utils
-from core.constants import DISPLAY_DECIMALS_CURSOR
+from delta.models import RenderOverlay, Composition, TieLine, IntersectionStatus, OverlayLine, IntersectionResult
+from delta.project_controller import ProjectController
+from delta.exceptions import EntityNotFoundError, ValidationError
+from delta import math_utils
+from delta.constants import DISPLAY_DECIMALS_CURSOR
 from ui.widgets.helpers import populate_combo, get_message_style
 from typing import Optional
 

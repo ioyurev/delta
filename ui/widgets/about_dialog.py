@@ -1,8 +1,8 @@
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QFrame
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QIcon
-from core.version import get_app_version
-from core.utils import resource_path
+from delta.version import get_app_version
+from delta.utils import resource_path
 
 class AboutDialog(QDialog):
     def __init__(self, parent=None):

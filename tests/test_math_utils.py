@@ -1,6 +1,6 @@
 import math
-from core import math_utils
-from core.models import Composition
+from delta import math_utils
+from delta.models import Composition
 
 # Вспомогательная функция для создания "идеальных" входных данных
 def make_ratios(*args):
@@ -364,5 +364,5 @@ class TestCollinearity:
         p3 = Composition(a=0, b=1, c=0)
         
         # Не должно падать
-        assert math_utils.are_compositions_collinear(p1, p2, p3) == True
+        assert math_utils.are_compositions_collinear(p1, p2, p3)
         assert math_utils.get_triangle_area(p1, p2, p3) == 0.0

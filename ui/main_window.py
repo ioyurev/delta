@@ -6,13 +6,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
 
-from core.project_controller import ProjectController
-from core.utils import resource_path
-from core.serializer import ProjectFileError
-from core.exceptions import DuplicateEntityError, ValidationError, EntityNotFoundError
-from core.models import RenderOverlay, Composition, CompositionUpdate, StyleUpdate
-from core.constants import DISPLAY_DECIMALS_CURSOR
-from core.version import get_app_version
+from delta.project_controller import ProjectController
+from delta.utils import resource_path
+from delta.serializer import ProjectFileError
+from delta.exceptions import DuplicateEntityError, ValidationError, EntityNotFoundError
+from delta.models import RenderOverlay, Composition, CompositionUpdate, StyleUpdate
+from delta.constants import DISPLAY_DECIMALS_CURSOR
+from delta.version import get_app_version
 
 from ui.canvas import PlotCanvas
 from ui.widgets.canvas_view import CanvasView

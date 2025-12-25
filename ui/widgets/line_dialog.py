@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QFormLayout, QComboBox, QPushButton, QGroupBox, QMessageBox
 from ui.widgets.base_dialog import BaseFormDialog
 from ui.widgets.helpers import create_line_width_spin, ColorPickerButton
-from core.models import TieLine, NamedComposition, VisualStyle
+from delta.models import TieLine, NamedComposition, VisualStyle
 from typing import Optional
 from dataclasses import dataclass
 

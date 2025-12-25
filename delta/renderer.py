@@ -1,9 +1,9 @@
 import matplotlib.patheffects as path_effects
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
-from core import math_utils
-from core.models import ProjectData, RenderOverlay, Composition
-from core.constants import (
+from delta import math_utils
+from delta.models import ProjectData, RenderOverlay, Composition
+from delta.constants import (
     COLOR_BACKGROUND, COLOR_TERNARY_TRIANGLE, COLOR_PROJECTION, 
     COLOR_INTERSECTION, ZORDER_GRID, ZORDER_LINES, ZORDER_COMPS,
     ZORDER_OVERLAY, ZORDER_PROJECTION, ZORDER_INTERSECTION,
