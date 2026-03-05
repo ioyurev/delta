@@ -13,8 +13,13 @@ from ui.canvas.interactor import CanvasInteractor
 class PlotCanvas(FigureCanvasQTAgg):
     """
     Главный виджет холста.
+    
+    Zoom/Pan preservation:
+        Toolbar matplotlib изменяет пределы осей напрямую, вызывая draw().
+        Переопределение draw() детектирует такие внешние перерисовки и 
+        инвалидирует кэш фона. При следующем draw_project() пределы 
+        сохраняются и восстанавливаются после draw_static_project().
     """
-    # Проксируем сигналы от Interactor наружу
     mouse_moved = Signal(Composition)
     annotation_dropped = Signal(str, float, float)
     vertex_label_dropped = Signal(int, float, float)
@@ -33,14 +38,17 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.project_renderer = ProjectRenderer(self.ax)
         self.interactor = CanvasInteractor(self)
         
-        # Состояние
+        # Состояние отрисовки
         self.current_project: Optional[ProjectData] = None
         self.highlighted_line_uid: Optional[str] = None
         self._static_background = None
         self._needs_full_redraw = True
         self._cached_overlay_uids: set[str] = set()
         
-        # Подключение сигналов
+        # Состояние вида (zoom/pan preservation)
+        self._in_draw_cycle = False    # True пока мы сами рисуем
+        self._initial_draw_done = False  # False до первого рендера
+        
         self._connect_signals()
 
     def _connect_signals(self) -> None:
@@ -51,6 +59,22 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.interactor.mouse_moved.connect(self.mouse_moved)
         self.interactor.annotation_dropped.connect(self.annotation_dropped)
         self.interactor.vertex_label_dropped.connect(self.vertex_label_dropped)
+
+    # === Перехват внешних перерисовок ===
+
+    def draw(self, *args, **kwargs):
+        """
+        Перехватывает ВСЕ вызовы draw(), включая от toolbar.
+        
+        Когда toolbar завершает zoom/pan/home, он вызывает draw_idle() → draw().
+        Мы детектируем это (флаг _in_draw_cycle == False) и инвалидируем
+        кэшированный фон, чтобы следующий draw_project() использовал
+        актуальный вид.
+        """
+        super().draw(*args, **kwargs)
+        if not self._in_draw_cycle:
+            # Внешняя перерисовка (toolbar zoom/pan/home)
+            self._static_background = None
 
     # === Public API ===
 
@@ -87,21 +111,51 @@ class PlotCanvas(FigureCanvasQTAgg):
         )
 
         if need_redraw:
-            self.project_renderer.draw_static_project(project_data, highlight_uids=new_highlights)
-            self.draw()
-            self._save_background()
-            self._needs_full_redraw = False
+            # ① Сохраняем текущие пределы осей (могут содержать пользовательский зум)
+            saved_xlim = self.ax.get_xlim()
+            saved_ylim = self.ax.get_ylim()
+            
+            self._in_draw_cycle = True
+            try:
+                self.project_renderer.draw_static_project(
+                    project_data, highlight_uids=new_highlights
+                )
+                
+                # ② Восстанавливаем пользовательский зум/пан
+                # На первом рендере — не восстанавливаем (saved содержит мусор)
+                if self._initial_draw_done:
+                    self.ax.set_xlim(saved_xlim)
+                    self.ax.set_ylim(saved_ylim)
+                else:
+                    self._initial_draw_done = True
+                
+                self.draw()
+                self._save_background()
+                self._needs_full_redraw = False
+            finally:
+                self._in_draw_cycle = False
         else:
             self.restore_region(self._static_background)
         
         if overlay_data:
-            artists = self.project_renderer.draw_dynamic_overlay(overlay_data, project_data.is_inverted)
+            artists = self.project_renderer.draw_dynamic_overlay(
+                overlay_data, project_data.is_inverted
+            )
             for artist in artists:
                 self.ax.draw_artist(artist)
                 artist.remove()
         
         if not need_redraw:
             self.blit(self.ax.bbox)
+
+    def reset_view(self) -> None:
+        """
+        Сброс к виду по умолчанию (полная диаграмма).
+        Вызывать при создании нового проекта или загрузке файла.
+        """
+        self._initial_draw_done = False
+        self._static_background = None
+        self._needs_full_redraw = True
 
     def export_image(self, filename: str) -> None:
         """Экспортирует текущее состояние в файл"""

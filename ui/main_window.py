@@ -500,6 +500,7 @@ class MainWindow(QMainWindow):
         with wait_cursor():
             self.controller.new_project()
             self._init_default_data()
+            self.canvas.reset_view()          # ← ДОБАВЛЕНО
             self._refresh_ui()
         
         self._current_filepath = None
@@ -544,6 +545,7 @@ class MainWindow(QMainWindow):
             with wait_cursor():
                 try:
                     self.controller.load_project(filepath)
+                    self.canvas.reset_view()  # ← ДОБАВЛЕНО
                     self._refresh_ui()
                     self._current_filepath = filepath
                     self._set_modified(False)
