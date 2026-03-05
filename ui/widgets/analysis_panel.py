@@ -321,7 +321,6 @@ class AnalysisPanel(QWidget):
         self._last_cursor_comp = comp
         if self.cb_target_source.currentIndex() == 0:
             self._calculate_and_display(comp)
-            self.overlay_changed.emit()
 
     def _on_calc_request(self, value: Optional[float] = None):
         idx = self.cb_target_source.currentIndex()

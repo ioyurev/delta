@@ -233,7 +233,6 @@ class MainWindow(QMainWindow):
         
         # Analysis Panel
         self.analysis_widget.update_needed.connect(self._refresh_ui)
-        self.analysis_widget.overlay_changed.connect(self._on_overlay_only_update)
 
     def _on_validation_error(self, message: str):
         """Показывает ошибку/предупреждение валидации в StatusBar"""
@@ -258,12 +257,13 @@ class MainWindow(QMainWindow):
         self.canvas.draw_project(project_data, overlay_data=overlay, force_full_redraw=True)
         self.table_widget.update_view(project_data)
         self.lines_widget.update_view(project_data)
+        
+        # Блокируем сигналы чтобы update_view → _on_calc_request
+        # не вызвал повторную перерисовку canvas
+        self.analysis_widget.blockSignals(True)
         self.analysis_widget.update_view()
+        self.analysis_widget.blockSignals(False)
 
-    def _on_overlay_only_update(self):
-        """Быстрое обновление только overlay (без перерисовки статики)"""
-        overlay = self.analysis_widget.get_overlay_data()
-        self.canvas.draw_project(self.controller.project_data, overlay_data=overlay)
 
     def _on_mouse_hover(self, comp: Composition):
         """Обновляет оверлей с координатами"""
@@ -300,7 +300,13 @@ class MainWindow(QMainWindow):
         self.coord_overlay.show()
         self.coord_overlay.raise_()
         
-        self.analysis_widget.on_cursor_move(comp)
+        # Обновляем analysis только когда вкладка видима
+        if self.analysis_widget.isVisible():
+            self.analysis_widget.on_cursor_move(comp)
+            overlay = self.analysis_widget.get_overlay_data()
+            self.canvas.draw_project(
+                self.controller.project_data, overlay_data=overlay
+            )
 
     # =========================================================================
     # ОБРАБОТЧИКИ: COMPOSITIONS

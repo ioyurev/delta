@@ -59,11 +59,16 @@ class CompositionsTable(QWidget):
         self.ed_c = QLineEdit("C")
         self.ed_c.setFixedWidth(40)
         
-        # ВМЕСТО КНОПКИ: Подключаем сигнал завершения редактирования
-        # Изменения применятся при нажатии Enter или потере фокуса
-        self.ed_a.editingFinished.connect(self._on_comps_update)
-        self.ed_b.editingFinished.connect(self._on_comps_update)
-        self.ed_c.editingFinished.connect(self._on_comps_update)
+        # Debounce таймер для обновления компонентов
+        # (editingFinished эмитится 3 раза при Tab между полями)
+        self._comp_update_timer = QTimer()
+        self._comp_update_timer.setSingleShot(True)
+        self._comp_update_timer.setInterval(100)
+        self._comp_update_timer.timeout.connect(self._on_comps_update)
+        
+        self.ed_a.editingFinished.connect(self._comp_update_timer.start)
+        self.ed_b.editingFinished.connect(self._comp_update_timer.start)
+        self.ed_c.editingFinished.connect(self._comp_update_timer.start)
         
         self.ed_a.setToolTip("Name of component A. Press Enter to apply.")
         self.ed_b.setToolTip("Name of component B. Press Enter to apply.")

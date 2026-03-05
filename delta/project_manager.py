@@ -213,11 +213,13 @@ class ProjectManager:
         comp.style.show_label = show_label
         comp.style.show_marker = show_marker
         
+        self._save_undo_before_change()                         # ◄ FIX: ДО мутации
+        
         self._project.compositions.append(comp)
         self._comp_map[comp.uid] = comp
         
         logger.bind(uid=comp.uid).info(f"Created composition '{name}'")
-        self._notify_change()
+        self._notify_change(save_undo=False)                    # ◄ FIX: уже сохранили
         return comp.uid
 
     def create_line(self, start_uid: str, end_uid: str) -> str:
@@ -248,12 +250,14 @@ class ProjectManager:
             if {line.start_uid, line.end_uid} == {start_uid, end_uid}:
                 raise DuplicateEntityError("Line already exists")
         
+        self._save_undo_before_change()                         # ◄ FIX
+        
         line = TieLine(start_uid=start_uid, end_uid=end_uid)
         self._project.lines.append(line)
         self._line_map[line.uid] = line
         
         logger.bind(uid=line.uid).info(f"Created line {start_uid} -> {end_uid}")
-        self._notify_change()
+        self._notify_change(save_undo=False)                    # ◄ FIX
         return line.uid
 
     # =========================================================================
@@ -262,19 +266,28 @@ class ProjectManager:
 
     def update_components(self, names: List[str]) -> None:
         if len(names) == 3:
+            self._save_undo_before_change()                     # ◄ FIX
             self._project.components = names
-            self._notify_change()
+            self._notify_change(save_undo=False)
 
     def update_grid(self, visible: bool, step: float) -> None:
+        self._save_undo_before_change()                         # ◄ FIX
         self._project.grid.visible = visible
         self._project.grid.step = step
-        self._notify_change()
+        self._notify_change(save_undo=False)
 
     def update_view_mode(self, is_inverted: bool) -> None:
         if self._project.is_inverted == is_inverted:
             return
+        
+        self._save_undo_before_change()                         # ◄ FIX
+        
+        # ◄ FIX: Пересчитать label_offset при смене ориентации
+        old_inv = self._project.is_inverted
         self._project.is_inverted = is_inverted
-        self._notify_change()
+        self._convert_label_offsets(old_inv, is_inverted)
+        
+        self._notify_change(save_undo=False)
 
     def update_composition(
         self,
@@ -309,18 +322,21 @@ class ProjectManager:
                 error_msg = e.errors()[0]['msg'] if e.errors() else "Invalid data"
                 raise ValidationError(str(error_msg))
         
+        self._save_undo_before_change()                         # ◄ FIX
         update.apply_to(comp)
-        self._notify_change()
+        self._notify_change(save_undo=False)
 
     def update_composition_style(self, uid: str, update: StyleUpdate) -> None:
         comp = self.get_composition(uid)
+        self._save_undo_before_change()                         # ◄ FIX
         update.apply_to(comp.style)
-        self._notify_change()
+        self._notify_change(save_undo=False)
 
     def update_line_style(self, uid: str, update: StyleUpdate) -> None:
         line = self.get_line(uid)
+        self._save_undo_before_change()                         # ◄ FIX
         update.apply_to(line.style)
-        self._notify_change()
+        self._notify_change(save_undo=False)
 
     def update_line_endpoints(self, line_uid: str, start_uid: str, end_uid: str) -> None:
         """
@@ -344,10 +360,11 @@ class ProjectManager:
                 if {line.start_uid, line.end_uid} == {start_uid, end_uid}:
                     raise DuplicateEntityError("Line with these endpoints exists")
         
+        self._save_undo_before_change()                         # ◄ FIX
         line = self.get_line(line_uid)
         line.start_uid = start_uid
         line.end_uid = end_uid
-        self._notify_change()
+        self._notify_change(save_undo=False)
 
     def set_composition_label_pos(self, uid: str, x: float, y: float) -> None:
         comp = self.get_composition(uid)
@@ -358,12 +375,14 @@ class ProjectManager:
         except ValueError as e:
             raise ValidationError(f"Invalid coordinates: {e}")
         
+        self._save_undo_before_change()                         # ◄ FIX
         comp.label_offset = (float(x - pt[0]), float(y - pt[1]))
-        self._notify_change()
+        self._notify_change(save_undo=False)
 
     def set_vertex_label_pos(self, index: int, x: float, y: float) -> None:
+        self._save_undo_before_change()                         # ◄ FIX
         self._project.vertex_labels_pos[str(index)] = (x, y)
-        self._notify_change()
+        self._notify_change(save_undo=False)
 
     # =========================================================================
     # УДАЛЕНИЕ
@@ -379,6 +398,8 @@ class ProjectManager:
         self.get_composition(uid)  # Проверка существования
         
         logger.info(f"Deleting composition: {uid}")
+        
+        self._save_undo_before_change()                         # ◄ FIX
         
         old_batch = self._batch_mode
         self._batch_mode = True
@@ -405,13 +426,14 @@ class ProjectManager:
         finally:
             self._batch_mode = old_batch
         
-        self._notify_change()
+        self._notify_change(save_undo=False)
 
     def delete_line(self, uid: str) -> None:
         self.get_line(uid)  # Проверка существования
+        self._save_undo_before_change()                         # ◄ FIX
         del self._line_map[uid]
         self._project.lines = [line for line in self._project.lines if line.uid != uid]
-        self._notify_change()
+        self._notify_change(save_undo=False)
 
     # =========================================================================
     # РАСЧЁТЫ
@@ -539,18 +561,76 @@ class ProjectManager:
         
         self._is_modified = True
         
-        if save_undo and self._enable_undo:
-            self._save_undo_state()
-        
         if self._on_change:
             self._on_change()
 
-    def _save_undo_state(self) -> None:
+    def _save_undo_before_change(self) -> None:
+        """
+        Сохраняет текущее состояние в undo-стек ПЕРЕД мутацией.
+        Вызывается явно в каждом мутирующем методе.
+        """
+        if not self._enable_undo:
+            return
+        
         self._undo_stack.append(copy.deepcopy(self._project))
         self._redo_stack.clear()
         
         if len(self._undo_stack) > self._max_undo_size:
             self._undo_stack.pop(0)
+
+
+    def _convert_label_offsets(self, old_inv: bool, new_inv: bool) -> None:
+        """
+        Пересчитывает label_offset всех составов при смене ориентации.
+        
+        Offset хранится в декартовых координатах (dx, dy) относительно 
+        позиции точки. При смене inverted позиция точки меняется,
+        поэтому нужно пересчитать offset, чтобы метка осталась 
+        на том же месте в барицентрических координатах.
+        """
+        for comp in self._project.compositions:
+            if comp.label_offset is None:
+                continue
+            
+            try:
+                off_x, off_y = comp.label_offset
+                
+                # Абсолютная позиция метки в старой системе
+                old_pt = math_utils.bary_to_cart(comp.composition, old_inv)
+                label_x = old_pt[0] + off_x
+                label_y = old_pt[1] + off_y
+                
+                # Новая позиция точки
+                new_pt = math_utils.bary_to_cart(comp.composition, new_inv)
+                
+                # Пересчитанный offset
+                comp.label_offset = (label_x - new_pt[0], label_y - new_pt[1])
+            except Exception:
+                # Если что-то сломалось — сбрасываем к дефолту
+                comp.label_offset = None
+        
+        # Пересчитываем позиции меток вершин
+        new_vertex_pos: Dict[str, tuple[float, float]] = {}
+        for key, (lx, ly) in self._project.vertex_labels_pos.items():
+            # Позиции вершин — абсолютные координаты, 
+            # их нужно полностью пересчитать
+            try:
+                idx = int(key)
+                old_vertices = math_utils.get_vertices(old_inv)
+                new_vertices = math_utils.get_vertices(new_inv)
+                
+                # Смещение метки относительно вершины
+                dx = lx - old_vertices[idx][0]
+                dy = ly - old_vertices[idx][1]
+                
+                new_vertex_pos[key] = (
+                    new_vertices[idx][0] + dx,
+                    new_vertices[idx][1] + dy
+                )
+            except (ValueError, IndexError):
+                pass
+        
+        self._project.vertex_labels_pos = new_vertex_pos
 
     def _check_degenerate_lines(self, composition_uid: str, new_coords: Composition) -> None:
         for line in self._project.lines:

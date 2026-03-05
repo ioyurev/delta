@@ -86,19 +86,14 @@ RATIO_MAX_DENOMINATOR = 1000000
 # Максимальная длина имени состава
 COMP_NAME_MAX_LENGTH = 100
 
-# Максимальное значение координаты в UI (clamping)
+# Ограничения ввода координат
 COORD_INPUT_MIN = 0.0
 COORD_INPUT_MAX = 1000.0
 
 # ============================================================
-# СИСТЕМНЫЕ КОНСТАНТЫ
+# ТОЧНОСТЬ ОТОБРАЖЕНИЯ
 # ============================================================
 
-# Ограничения ввода
-COORD_INPUT_MIN = 0.0
-COORD_INPUT_MAX = 1000.0  
-
-# Точность отображения
 DISPLAY_DECIMALS_TABLE = 4
 DISPLAY_DECIMALS_CURSOR = 4
 DISPLAY_DECIMALS_ANALYSIS = 3

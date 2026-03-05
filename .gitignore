@@ -9,3 +9,7 @@ logs/
 
 # Virtual environments
 .venv
+
+# User data and experiments
+sandbox/
+projects/
