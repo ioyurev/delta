@@ -39,6 +39,7 @@ class CompositionsTable(QWidget):
     components_changed = Signal(list)
     grid_changed = Signal(bool, float)
     view_mode_changed = Signal(bool)
+    aspect_lock_changed = Signal(bool)
     validation_error = Signal(str)
 
     def __init__(self):
@@ -74,13 +75,19 @@ class CompositionsTable(QWidget):
         h_comp.addWidget(self.ed_c)
         sys_lay.addLayout(h_comp)
         
-        # View & Grid
+         # View & Grid
         h_sets = QHBoxLayout()
         self.chk_inv = QCheckBox("Inverted")
         self.chk_inv.toggled.connect(lambda v: self.view_mode_changed.emit(v))
         
         self.chk_grid = QCheckBox("Grid")
         self.chk_grid.toggled.connect(self._on_grid_update)
+        
+        self.chk_aspect = QCheckBox("Lock Aspect")             # ◄ НОВОЕ
+        self.chk_aspect.setChecked(True)                        # ◄ НОВОЕ
+        self.chk_aspect.toggled.connect(                        # ◄ НОВОЕ
+            lambda v: self.aspect_lock_changed.emit(v)          # ◄ НОВОЕ
+        )                                                       # ◄ НОВОЕ
         
         self.sp_step = QDoubleSpinBox()
         self.sp_step.setRange(0.01, 0.5)
@@ -90,9 +97,14 @@ class CompositionsTable(QWidget):
         
         self.chk_inv.setToolTip("Flip triangle upside down (vertex C at bottom)")
         self.chk_grid.setToolTip("Show/hide grid lines on the diagram")
+        self.chk_aspect.setToolTip(                             # ◄ НОВОЕ
+            "Lock: equal scaling, diagram keeps proportions\n"  # ◄ НОВОЕ
+            "Unlock: diagram stretches to fill available space" # ◄ НОВОЕ
+        )                                                       # ◄ НОВОЕ
         self.sp_step.setToolTip("Grid spacing (0.1 = 10% intervals)")
         
         h_sets.addWidget(self.chk_inv)
+        h_sets.addWidget(self.chk_aspect)                       # ◄ НОВОЕ
         h_sets.addWidget(self.chk_grid)
         h_sets.addWidget(self.sp_step)
         sys_lay.addLayout(h_sets)

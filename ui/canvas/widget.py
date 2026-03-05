@@ -200,3 +200,17 @@ class PlotCanvas(FigureCanvasQTAgg):
         self._needs_full_redraw = True
         if self.current_project:
             self.draw_project(self.current_project, force_full_redraw=True)
+
+    def set_aspect_locked(self, locked: bool) -> None:          # ◄ НОВОЕ
+        """
+        Переключает режим пропорций осей.
+        
+        locked=True:  'equal' — 1 единица X = 1 единица Y
+        locked=False: 'auto'  — оси растягиваются по доступному пространству
+        """
+        mode = 'equal' if locked else 'auto'
+        self.project_renderer.set_aspect_mode(mode)
+        self._static_background = None
+        self._needs_full_redraw = True
+        if self.current_project:
+            self.draw_project(self.current_project, force_full_redraw=True)

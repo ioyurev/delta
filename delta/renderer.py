@@ -28,10 +28,15 @@ class ProjectRenderer:
         self.ax = ax
         self._line_artists: dict[str, Line2D] = {}
         self._cached_overlay_uids: set[str] = set()
+        self._aspect_mode: str = 'equal'                    # ◄ НОВОЕ
+
+    def set_aspect_mode(self, mode: str) -> None:           # ◄ НОВОЕ
+        """Устанавливает режим пропорций: 'equal' или 'auto'"""
+        self._aspect_mode = mode
 
     def clear(self):
         self.ax.clear()
-        self.ax.set_aspect('equal')
+        self.ax.set_aspect(self._aspect_mode)               # ◄ ИЗМЕНЕНО
         self.ax.set_facecolor(COLOR_BACKGROUND)
         self._line_artists.clear()
 
@@ -127,7 +132,7 @@ class ProjectRenderer:
     def draw_dynamic_overlay(self, overlay: RenderOverlay, is_inverted: bool) -> list:
         """
         Рисует временные элементы.
-        Возвращает список artists для отрисовки (чтобы потом их удалить, если нужно, но при blit это не обязательно).
+        Возвращает список artists для отрисовки.
         """
         temp_artists = []
         
@@ -199,7 +204,6 @@ class ProjectRenderer:
         if step >= 1.0: 
             return
         
-        # Используем генератор вместо np.arange для избежания ошибок округления
         num_steps = int(round(1.0 / step))
         vals = [i * step for i in range(1, num_steps)]
         

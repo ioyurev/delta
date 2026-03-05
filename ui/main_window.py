@@ -220,6 +220,7 @@ class MainWindow(QMainWindow):
         self.table_widget.components_changed.connect(self._on_comps_changed)
         self.table_widget.grid_changed.connect(self._on_grid_changed)
         self.table_widget.view_mode_changed.connect(self._on_view_changed)
+        self.table_widget.aspect_lock_changed.connect(self._on_aspect_changed)
         self.table_widget.request_edit_style.connect(self._on_comp_style_req)
         self.table_widget.request_delete_composition.connect(self._on_comp_delete_req)
         self.table_widget.validation_error.connect(self._on_validation_error)
@@ -444,6 +445,13 @@ class MainWindow(QMainWindow):
         self.controller.update_view_mode(is_inverted=inverted)
         mode = "inverted" if inverted else "normal"
         self.statusBar().showMessage(f"Triangle mode: {mode}", 2000)
+
+    def _on_aspect_changed(self, locked: bool):                 # ◄ НОВОЕ
+        """Переключение режима пропорций"""
+        self.canvas.set_aspect_locked(locked)
+        self.canvas_view.set_aspect_locked(locked)
+        mode = "locked (equal)" if locked else "free (stretch)"
+        self.statusBar().showMessage(f"Aspect ratio: {mode}", 2000)
 
     # =========================================================================
     # УПРАВЛЕНИЕ СОСТОЯНИЕМ ОКНА
