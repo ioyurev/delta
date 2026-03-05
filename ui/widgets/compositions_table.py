@@ -281,14 +281,13 @@ class CompositionsTable(QWidget):
                 
                 self._previous_values[(i, col)] = val
                 
-                # Устанавливаем фон и tooltip в зависимости от статуса
+                # ИСПРАВЛЕНИЕ: Не красим в желтый, если сумма != 1, просто обновляем тултип
                 if col > 0:  # Только для координатных ячеек
+                    item.setBackground(QBrush(_get_normal_color()))
                     if needs_warning:
-                        # Адаптивный жёлтый фон для ненормализованных
-                        item.setBackground(QBrush(get_cell_highlight_color("warning")))
+                        # Показываем нормализацию только в подсказке
                         item.setToolTip(norm_tooltip)
                     else:
-                        item.setBackground(QBrush(_get_normal_color()))
                         item.setToolTip(TOOLTIP_COORDINATE)
                 else:
                     item.setBackground(QBrush(_get_normal_color()))

@@ -346,13 +346,23 @@ class MainWindow(QMainWindow):
 
     def _on_composition_added(self) -> None:
         """Обработчик добавления нового состава"""
-        uid = self.controller.create_composition()
-        
-        # Обратная связь
-        self.statusBar().showMessage("New composition added", 3000)
-        
-        # Выделяем новую строку в таблице
-        self.table_widget.select_composition(uid)
+        try:
+            # Передаем начальные координаты, отличные от нуля.
+            # (0, 0, 0) вызывает ошибку валидации в ProjectManager.
+            uid = self.controller.create_composition(
+                name="New Point", 
+                a=0.33, b=0.33, c=0.34
+            )
+            
+            # Обратная связь
+            self.statusBar().showMessage("New composition added", 3000)
+            
+            # Выделяем новую строку в таблице
+            self.table_widget.select_composition(uid)
+            
+        except ValidationError as e:
+            # На случай, если что-то пойдет не так, показываем ошибку пользователю
+            QMessageBox.warning(self, "Creation Error", str(e))
 
     @handle_entity_errors
     def _on_line_del_req(self, uid: str):

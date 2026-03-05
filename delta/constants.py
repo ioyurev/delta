@@ -96,7 +96,7 @@ COORD_INPUT_MAX = 1000.0
 
 # Ограничения ввода
 COORD_INPUT_MIN = 0.0
-COORD_INPUT_MAX = 1.0
+COORD_INPUT_MAX = 1000.0  
 
 # Точность отображения
 DISPLAY_DECIMALS_TABLE = 4
@@ -111,13 +111,11 @@ DISPLAY_DECIMALS_ANALYSIS = 3
 UNITS_MOLAR_FRACTION = "mol. fraction"
 UNITS_MOLAR_PERCENT = "mol.%"
 
-# Tooltips для координат
-TOOLTIP_COORDINATE = "Molar fraction (0 to 1). Values are automatically normalized so that A + B + C = 1"
-TOOLTIP_COORDINATE_SHORT = "Molar fraction (normalized)"
+TOOLTIP_COORDINATE = "Value (molar fraction or stoichiometry). Will be normalized automatically."
+TOOLTIP_COORDINATE_SHORT = "Value"
 
 # Порог для предупреждения о ненормализованных данных
-# Если |sum - 1.0| > этого значения, показываем предупреждение
-NORMALIZATION_WARNING_THRESHOLD = 0.01  # 1%
+NORMALIZATION_WARNING_THRESHOLD = 0.01
 
 # ============================================================
 # ЦВЕТА ПО УМОЛЧАНИЮ
