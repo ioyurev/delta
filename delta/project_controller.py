@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, Signal
 
 from delta.project_manager import ProjectManager
 from delta.models import (
-    ProjectData, NamedComposition, TieLine, CurveLine, GuidePoint,
+    ProjectData, NamedComposition, TieLine, CurveLine, GuidePoint, Composition,
     CompositionUpdate, StyleUpdate, ArrowSettings, IntersectionResult
 )
 
@@ -141,6 +141,12 @@ class ProjectController(QObject):
 
     def delete_curve_line(self, uid: str) -> None:
         self._manager.delete_curve_line(uid)
+
+    def update_lock_aspect(self, locked: bool) -> None:
+        self._manager.update_lock_aspect(locked)
+
+    def update_display_region(self, points: List[Composition]) -> None:
+        self._manager.update_display_region(points)
 
     def update_components(self, names: List[str]) -> None:
         self._manager.update_components(names)

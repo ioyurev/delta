@@ -25,6 +25,7 @@ from ui.widgets.intersection_dialog import IntersectionDialog
 from ui.widgets.analysis_panel import AnalysisPanel
 from ui.widgets.about_dialog import AboutDialog
 from ui.widgets.docs_viewer import DocsViewer
+from ui.widgets.display_region_widget import DisplayRegionWidget
 from ui.widgets.helpers import handle_entity_errors, build_menu, wait_cursor, get_overlay_style
 
 
@@ -178,10 +179,14 @@ class MainWindow(QMainWindow):
         self.analysis_widget = AnalysisPanel(self.controller)
         tabs.addTab(self.analysis_widget, "Analysis")
         tabs.setTabToolTip(2, "Calculate intersections and analyze phase diagrams")
-        
+
+        self.region_widget = DisplayRegionWidget()
+        tabs.addTab(self.region_widget, "Region")
+        tabs.setTabToolTip(3, "Restrict diagram display area to a custom polygon")
+
         # Обновление при смене вкладки
         tabs.currentChanged.connect(self._refresh_ui)
-        
+
         return tabs
 
     def _init_overlay(self):
@@ -246,6 +251,9 @@ class MainWindow(QMainWindow):
         # Analysis Panel
         self.analysis_widget.update_needed.connect(self._refresh_ui)
 
+        # Display Region
+        self.region_widget.region_changed.connect(self._on_region_changed)
+
     def _on_validation_error(self, message: str):
         """Показывает ошибку/предупреждение валидации в StatusBar"""
         # Для заметок (Note:) показываем дольше
@@ -265,11 +273,17 @@ class MainWindow(QMainWindow):
         """Полное обновление UI"""
         project_data = self.controller.project_data
         overlay = self.analysis_widget.get_overlay_data()
-        
+
         self.canvas.draw_project(project_data, overlay_data=overlay, force_full_redraw=True)
         self.table_widget.update_view(project_data)
         self.lines_widget.update_view(project_data)
-        
+        self.region_widget.update_view(project_data)
+
+        # Применяем lock_aspect из данных проекта
+        locked = project_data.lock_aspect
+        self.canvas.set_aspect_locked(locked)
+        self.canvas_view.set_aspect_locked(locked)
+
         # Блокируем сигналы чтобы update_view → _on_calc_request
         # не вызвал повторную перерисовку canvas
         self.analysis_widget.blockSignals(True)
@@ -599,12 +613,17 @@ class MainWindow(QMainWindow):
         mode = "inverted" if inverted else "normal"
         self.statusBar().showMessage(f"Triangle mode: {mode}", 2000)
 
-    def _on_aspect_changed(self, locked: bool):                 # ◄ НОВОЕ
-        """Переключение режима пропорций"""
+    def _on_aspect_changed(self, locked: bool):
+        """Переключение режима пропорций и сохранение в проект"""
         self.canvas.set_aspect_locked(locked)
         self.canvas_view.set_aspect_locked(locked)
+        self.controller.update_lock_aspect(locked)
         mode = "locked (equal)" if locked else "free (stretch)"
         self.statusBar().showMessage(f"Aspect ratio: {mode}", 2000)
+
+    def _on_region_changed(self, points: list) -> None:
+        """Обновляет область отображения в проекте"""
+        self.controller.update_display_region(points)
 
     # =========================================================================
     # УПРАВЛЕНИЕ СОСТОЯНИЕМ ОКНА

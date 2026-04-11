@@ -5,7 +5,9 @@
       "Bash(uv)",
       "Bash(uv run:*)",
       "Bash(PYTHONUTF8=1 uv run mypy . --pretty)",
-      "Bash(uv sync:*)"
+      "Bash(uv sync:*)",
+      "Bash(PYTHONUTF8=1 uv run ruff check . --fix)",
+      "Bash(PYTHONUTF8=1 uv run:*)"
     ]
   }
 }

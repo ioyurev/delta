@@ -2,13 +2,15 @@ import numpy as np
 import matplotlib.patheffects as path_effects
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
-from typing import Literal
+from matplotlib.patches import PathPatch
+from matplotlib.path import Path
+from typing import List, Literal
 from delta import math_utils
 from delta.models import ProjectData, RenderOverlay, Composition, ArrowSettings
 from delta.constants import (
     COLOR_BACKGROUND, COLOR_TERNARY_TRIANGLE, COLOR_PROJECTION,
     COLOR_INTERSECTION, ZORDER_GRID, ZORDER_LINES, ZORDER_COMPS,
-    ZORDER_OVERLAY, ZORDER_PROJECTION, ZORDER_INTERSECTION,
+    ZORDER_MASK, ZORDER_OVERLAY, ZORDER_PROJECTION, ZORDER_INTERSECTION,
     VERTEX_LABEL_OFFSET, COMP_LABEL_OFFSET, TRIANGLE_HEIGHT
 )
 
@@ -188,12 +190,22 @@ class ProjectRenderer:
         # 7. Подсветка
         if highlight_uids:
             self.apply_highlights(highlight_uids)
-            
-        # 8. Границы отображения
-        padding = 0.1
-        h = math_utils.H
-        self.ax.set_xlim(-padding, 1.0 + padding)
-        self.ax.set_ylim(-padding, h + padding)
+
+        # 8. Маска области отображения (если задана)
+        region_cart = self._valid_region_cart(project.display_region, is_inv)
+        if region_cart:
+            self._draw_region_mask(region_cart)
+            rx = [pt[0] for pt in region_cart]
+            ry = [pt[1] for pt in region_cart]
+            pad = 0.05
+            self.ax.set_xlim(min(rx) - pad, max(rx) + pad)
+            self.ax.set_ylim(min(ry) - pad, max(ry) + pad)
+        else:
+            padding = 0.1
+            h = math_utils.H
+            self.ax.set_xlim(-padding, 1.0 + padding)
+            self.ax.set_ylim(-padding, h + padding)
+
         self.ax.axis('off')
 
     def draw_dynamic_overlay(self, overlay: RenderOverlay, is_inverted: bool) -> list:
@@ -354,6 +366,43 @@ class ProjectRenderer:
             style='italic',
             bbox=dict(boxstyle='round,pad=0.5', facecolor='#f5f5f5', edgecolor='#cccccc')
         )
+
+    def _valid_region_cart(
+        self, region: List[Composition], is_inv: bool
+    ) -> List[tuple]:
+        """Converts display_region compositions to Cartesian; returns list if ≥ 3 valid."""
+        pts = []
+        for comp in region:
+            try:
+                if not comp.is_valid:
+                    continue
+                pt = math_utils.bary_to_cart(comp, is_inv)
+                pts.append((float(pt[0]), float(pt[1])))
+            except Exception:
+                continue
+        return pts if len(pts) >= 3 else []
+
+    def _draw_region_mask(self, region_cart: List[tuple]) -> None:
+        """Draws a white mask covering everything outside the display region polygon."""
+        big = 10.0
+        outer = [(-big, -big), (big, -big), (big, big), (-big, big)]
+        outer_verts = outer + [outer[0]]
+        outer_codes = (
+            [Path.MOVETO] + [Path.LINETO] * (len(outer) - 1) + [Path.CLOSEPOLY]
+        )
+
+        # Inner polygon with reversed winding to create a hole
+        inner = list(reversed(region_cart))
+        inner_verts = inner + [inner[0]]
+        inner_codes = (
+            [Path.MOVETO] + [Path.LINETO] * (len(inner) - 1) + [Path.CLOSEPOLY]
+        )
+
+        path = Path(outer_verts + inner_verts, outer_codes + inner_codes)
+        patch = PathPatch(
+            path, facecolor=COLOR_BACKGROUND, edgecolor='none', zorder=ZORDER_MASK
+        )
+        self.ax.add_patch(patch)
 
     def _draw_vertices(self, project: ProjectData):
         is_inv = project.is_inverted

@@ -308,6 +308,8 @@ class ProjectData(BaseModel):
     curve_lines: List[CurveLine] = Field(default_factory=list)
     grid: GridSettings = Field(default_factory=GridSettings)
     is_inverted: bool = False
+    lock_aspect: bool = True
+    display_region: List[Composition] = Field(default_factory=list)
     vertex_labels_pos: Dict[str, Tuple[float, float]] = Field(default_factory=dict)
 
     @field_validator('components')

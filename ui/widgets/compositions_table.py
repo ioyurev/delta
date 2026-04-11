@@ -211,7 +211,11 @@ class CompositionsTable(QWidget):
         self.chk_inv.blockSignals(True)
         self.chk_inv.setChecked(project_data.is_inverted)
         self.chk_inv.blockSignals(False)
-        
+
+        self.chk_aspect.blockSignals(True)
+        self.chk_aspect.setChecked(project_data.lock_aspect)
+        self.chk_aspect.blockSignals(False)
+
         self.chk_grid.blockSignals(True)
         self.sp_step.blockSignals(True)
         self.chk_grid.setChecked(project_data.grid.visible)
