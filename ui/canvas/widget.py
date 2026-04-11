@@ -48,6 +48,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         # Состояние вида (zoom/pan preservation)
         self._in_draw_cycle = False    # True пока мы сами рисуем
         self._initial_draw_done = False  # False до первого рендера
+        self._region_was_active = False  # Предыдущее состояние display_region
         
         self._connect_signals()
 
@@ -111,24 +112,37 @@ class PlotCanvas(FigureCanvasQTAgg):
         )
 
         if need_redraw:
-            # ① Сохраняем текущие пределы осей (могут содержать пользовательский зум)
-            saved_xlim = self.ax.get_xlim()
-            saved_ylim = self.ax.get_ylim()
-            
+            # Когда область отображения активна, рендерер сам выставляет
+            # правильные пределы осей — сохранённый зум пользователя не нужен.
+            region_active = (
+                project_data.display_region_enabled
+                and len(project_data.display_region) >= 3
+            )
+
+            # При смене состояния региона сбрасываем память зума,
+            # чтобы переход активен↔неактивен давал «чистый» вид.
+            if region_active != self._region_was_active:
+                self._initial_draw_done = False
+                self._region_was_active = region_active
+
+            # ① Сохраняем пределы только когда регион НЕ активен
+            if not region_active:
+                saved_xlim = self.ax.get_xlim()
+                saved_ylim = self.ax.get_ylim()
+
             self._in_draw_cycle = True
             try:
                 self.project_renderer.draw_static_project(
                     project_data, highlight_uids=new_highlights
                 )
-                
-                # ② Восстанавливаем пользовательский зум/пан
-                # На первом рендере — не восстанавливаем (saved содержит мусор)
-                if self._initial_draw_done:
+
+                # ② Восстанавливаем зум пользователя только вне режима региона
+                if not region_active and self._initial_draw_done:
                     self.ax.set_xlim(saved_xlim)
                     self.ax.set_ylim(saved_ylim)
                 else:
                     self._initial_draw_done = True
-                
+
                 self.draw()
                 self._save_background()
                 self._needs_full_redraw = False

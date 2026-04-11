@@ -150,7 +150,7 @@ class ProjectRenderer:
                 pt = math_utils.bary_to_cart(comp.composition, is_inv)
             except Exception:
                 continue
-            
+
             # Маркер
             if comp.style.show_marker:
                 self.ax.plot(
@@ -161,8 +161,9 @@ class ProjectRenderer:
                     zorder=ZORDER_COMPS,
                     linestyle='None'
                 )
-            
-            # Метка
+
+            # Метка — выше маски (ZORDER_MASK + 1), чтобы не закрывалась
+            # даже если состав находится на границе области отображения
             if comp.name and comp.style.show_label:
                 if comp.label_offset:
                     off_x, off_y = comp.label_offset
@@ -170,13 +171,14 @@ class ProjectRenderer:
                 else:
                     off = COMP_LABEL_OFFSET if is_inv else -COMP_LABEL_OFFSET
                     txt_x, txt_y = pt[0], pt[1] + off
-                
+
                 self.ax.text(
                     txt_x, txt_y, comp.name,
                     ha='center', fontweight='bold',
                     fontsize=FONT_SIZE,
                     gid=comp.uid, picker=True,
-                    clip_on=False
+                    clip_on=False,
+                    zorder=ZORDER_MASK + 1,
                 )
 
         # 5. Вершины
@@ -464,5 +466,6 @@ class ProjectRenderer:
                 x, y, names[idx],
                 ha=current_ha, va=current_va,
                 fontweight='bold', fontsize=FONT_SIZE,
-                gid=f"vertex_{idx}", picker=True
+                gid=f"vertex_{idx}", picker=True,
+                zorder=ZORDER_MASK + 1,
             )
