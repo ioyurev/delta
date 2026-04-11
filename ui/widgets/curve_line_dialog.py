@@ -3,7 +3,8 @@
 
 Позволяет:
 - Задать start/end составы
-- Управлять guide-точками: через таблицу (A/B/C) или клик по холсту
+- Управлять guide-точками: через таблицу или клик по холсту (значения нормируются)
+- Настроить маркеры guide-точек (цвет, символ, размер)
 - Настроить стиль и стрелки
 """
 
@@ -26,7 +27,10 @@ from delta.models import (
     CurveLine, NamedComposition, VisualStyle, ArrowSettings, GuidePoint, Composition,
 )
 from delta.constants import LINE_WIDTH_DEFAULT, ARROW_COUNT_MIN, ARROW_COUNT_MAX
-from ui.widgets.helpers import create_line_width_spin, ColorPickerButton, CopyableTableWidget
+from ui.widgets.helpers import (
+    create_line_width_spin, create_marker_size_spin,
+    ColorPickerButton, CopyableTableWidget,
+)
 
 if TYPE_CHECKING:
     pass
@@ -42,6 +46,10 @@ class CurveLineDialogResult:
     line_style: str
     width: float
     poly_degree: int = 3
+    show_guide_markers: bool = False
+    guide_marker_color: str = "#888888"
+    guide_marker_symbol: str = "o"
+    guide_marker_size: float = 4.0
     arrow: ArrowSettings = field(default_factory=ArrowSettings)
 
 
@@ -74,9 +82,14 @@ class CurveLineDialog(QDialog):
             else VisualStyle(size=LINE_WIDTH_DEFAULT)
         )
         self._initial_arrow = current_line.arrow if current_line else ArrowSettings()
+        self._initial_gm_style = (
+            current_line.guide_marker_style if current_line
+            else VisualStyle(color="#888888")
+        )
+        self._initial_show_gm = current_line.show_guide_markers if current_line else False
 
         self.setWindowTitle("Curve Line" if not current_line else "Edit Curve Line")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(440)
         # Не WindowModal — остаётся поверх главного окна, но не блокирует холст
         self.setWindowModality(Qt.WindowModality.NonModal)
 
@@ -86,6 +99,7 @@ class CurveLineDialog(QDialog):
         self._init_appearance()
         self._init_endpoints()
         self._init_guide_points()
+        self._init_guide_markers()
         self._init_arrow_section()
         self._init_buttons()
 
@@ -185,6 +199,7 @@ class CurveLineDialog(QDialog):
         self.table.verticalHeader().setVisible(True)
         self.table.setMinimumHeight(120)
         self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.table.setToolTip("Molar fractions — auto-normalized to sum = 1")
         vbox.addWidget(self.table)
 
         # Заполняем из текущей линии
@@ -212,7 +227,50 @@ class CurveLineDialog(QDialog):
         self._pick_label.setStyleSheet("color: #888; font-style: italic; font-size: 11px;")
         vbox.addWidget(self._pick_label)
 
+        lbl_norm = QLabel("Values are auto-normalized: sum(fractions) = 1")
+        lbl_norm.setStyleSheet("color: #888; font-size: 10px;")
+        vbox.addWidget(lbl_norm)
+
         gb.setLayout(vbox)
+        self._layout.addWidget(gb)
+
+    def _init_guide_markers(self) -> None:
+        gb = QGroupBox("Guide Markers")
+        form = QFormLayout()
+
+        self.chk_gm = QCheckBox("Show markers at guide points")
+        self.chk_gm.setChecked(self._initial_show_gm)
+        self.chk_gm.setToolTip("Draw a marker symbol at each guide point position")
+        form.addRow(self.chk_gm)
+
+        self.btn_gm_color = ColorPickerButton(self._initial_gm_style.color)
+        self.btn_gm_color.setToolTip("Guide marker color")
+        form.addRow("Color:", self.btn_gm_color)
+
+        self.cb_gm_symbol = QComboBox()
+        _symbols = [
+            ("● Circle", "o"), ("■ Square", "s"), ("▲ Triangle up", "^"),
+            ("▼ Triangle down", "v"), ("◆ Diamond", "D"), ("★ Star", "*"),
+            ("✕ Cross", "x"), ("✚ Plus", "P"),
+        ]
+        for lbl, sym in _symbols:
+            self.cb_gm_symbol.addItem(lbl, sym)
+        cur_sym = self._initial_gm_style.marker_symbol
+        for i in range(self.cb_gm_symbol.count()):
+            if self.cb_gm_symbol.itemData(i) == cur_sym:
+                self.cb_gm_symbol.setCurrentIndex(i)
+                break
+        self.cb_gm_symbol.setToolTip("Marker shape")
+        form.addRow("Symbol:", self.cb_gm_symbol)
+
+        self.sb_gm_size = create_marker_size_spin(value=self._initial_gm_style.size)
+        self.sb_gm_size.setToolTip("Marker size in points")
+        form.addRow("Size:", self.sb_gm_size)
+
+        self._update_gm_controls(self.chk_gm.isChecked())
+        self.chk_gm.toggled.connect(self._update_gm_controls)
+
+        gb.setLayout(form)
         self._layout.addWidget(gb)
 
     def _init_arrow_section(self) -> None:
@@ -264,13 +322,17 @@ class CurveLineDialog(QDialog):
     # =========================================================================
 
     def _append_guide_row(self, comp: Optional[Composition] = None) -> int:
-        """Добавляет строку в таблицу и возвращает её индекс."""
+        """Добавляет строку в таблицу; если comp задан — показывает нормализованные значения."""
         row = self.table.rowCount()
         self.table.insertRow(row)
 
-        a = comp.a if comp else 0.33
-        b = comp.b if comp else 0.33
-        c = comp.c if comp else 0.34
+        if comp is not None and comp.is_valid:
+            try:
+                a, b, c = comp.normalized
+            except Exception:
+                a, b, c = comp.a, comp.b, comp.c
+        else:
+            a, b, c = 1 / 3, 1 / 3, 1 / 3
 
         for col, val in enumerate([a, b, c]):
             spin = QDoubleSpinBox()
@@ -292,13 +354,11 @@ class CurveLineDialog(QDialog):
     def _delete_row(self, row: int) -> None:
         """Удаляет строку; пересчитывает привязки кнопок удаления."""
         self.table.removeRow(row)
-        # Обновляем row-захваты в кнопках удаления после сдвига
         for r in range(self.table.rowCount()):
             widget = self.table.cellWidget(r, 3)
             if widget is None:
                 continue
             btn = cast(QPushButton, widget)
-            # Переподключаем сигнал с актуальным номером строки
             try:
                 btn.clicked.disconnect()
             except RuntimeError:
@@ -314,9 +374,15 @@ class CurveLineDialog(QDialog):
 
     def add_guide_point_from_canvas(self, comp: Composition) -> None:
         """Вызывается главным окном после клика на холсте."""
-        self._pick_label.setText(
-            f"Added: A={comp.a:.4f}  B={comp.b:.4f}  C={comp.c:.4f}"
-        )
+        try:
+            a, b, c = comp.normalized
+            self._pick_label.setText(
+                f"Added: {self._components[0]}={a:.4f}  "
+                f"{self._components[1]}={b:.4f}  "
+                f"{self._components[2]}={c:.4f}"
+            )
+        except Exception:
+            self._pick_label.setText("Added guide point")
         self._append_guide_row(comp)
 
     # =========================================================================
@@ -327,7 +393,13 @@ class CurveLineDialog(QDialog):
         self.cb_arrow_dir.setEnabled(enabled)
         self.sb_arrow_count.setEnabled(enabled)
 
+    def _update_gm_controls(self, enabled: bool) -> None:
+        self.btn_gm_color.setEnabled(enabled)
+        self.cb_gm_symbol.setEnabled(enabled)
+        self.sb_gm_size.setEnabled(enabled)
+
     def _collect_guide_points(self) -> List[GuidePoint]:
+        """Собирает guide-точки из таблицы, нормализуя значения."""
         guides = []
         for row in range(self.table.rowCount()):
             raw = [self.table.cellWidget(row, col) for col in range(3)]
@@ -335,10 +407,12 @@ class CurveLineDialog(QDialog):
                 continue
             spins = [cast(QDoubleSpinBox, w) for w in raw]
             a, b, c = spins[0].value(), spins[1].value(), spins[2].value()
-            comp = Composition(a=a, b=b, c=c)
-            if not comp.is_valid:
+            raw_comp = Composition(a=a, b=b, c=c)
+            if not raw_comp.is_valid:
                 continue
-            guides.append(GuidePoint(composition=comp))
+            # Нормализуем перед сохранением
+            na, nb, nc = raw_comp.normalized
+            guides.append(GuidePoint(composition=Composition(a=na, b=nb, c=nc)))
         return guides
 
     def _on_accept(self) -> None:
@@ -366,6 +440,10 @@ class CurveLineDialog(QDialog):
             line_style=self.cb_style.currentData(),
             width=self.sb_width.value(),
             poly_degree=self.cb_degree.currentData(),
+            show_guide_markers=self.chk_gm.isChecked(),
+            guide_marker_color=self.btn_gm_color.color(),
+            guide_marker_symbol=self.cb_gm_symbol.currentData(),
+            guide_marker_size=self.sb_gm_size.value(),
             arrow=ArrowSettings(
                 enabled=self.chk_arrows.isChecked(),
                 direction=self.cb_arrow_dir.currentData(),

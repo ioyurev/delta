@@ -134,6 +134,11 @@ class ProjectController(QObject):
     ) -> None:
         self._manager.update_curve_line_guides(uid, guides, poly_degree)
 
+    def update_curve_line_guide_markers(
+        self, uid: str, show: bool, style: StyleUpdate
+    ) -> None:
+        self._manager.update_curve_line_guide_markers(uid, show, style)
+
     def delete_curve_line(self, uid: str) -> None:
         self._manager.delete_curve_line(uid)
 

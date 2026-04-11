@@ -517,6 +517,12 @@ class MainWindow(QMainWindow):
                 ))
                 self.controller.update_curve_line_arrow(data.uid, data.arrow)
                 self.controller.update_curve_line_guides(data.uid, data.guide_points, data.poly_degree)
+                self.controller.update_curve_line_guide_markers(
+                    data.uid, data.show_guide_markers,
+                    StyleUpdate(color=data.guide_marker_color,
+                                marker_symbol=data.guide_marker_symbol,
+                                size=data.guide_marker_size),
+                )
                 self.statusBar().showMessage("Curve line updated", 3000)
             else:
                 # Создание
@@ -528,6 +534,12 @@ class MainWindow(QMainWindow):
                 ))
                 self.controller.update_curve_line_arrow(uid, data.arrow)
                 self.controller.update_curve_line_guides(uid, data.guide_points, data.poly_degree)
+                self.controller.update_curve_line_guide_markers(
+                    uid, data.show_guide_markers,
+                    StyleUpdate(color=data.guide_marker_color,
+                                marker_symbol=data.guide_marker_symbol,
+                                size=data.guide_marker_size),
+                )
                 self.statusBar().showMessage("Curve line created", 3000)
         except (ValidationError, EntityNotFoundError) as e:
             QMessageBox.warning(self, "Error", str(e))

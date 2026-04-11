@@ -126,6 +126,22 @@ class ProjectRenderer:
                     cline.style.color, cline.style.size
                 )
 
+            if cline.show_guide_markers:
+                ms = cline.guide_marker_style
+                for gp in cline.guide_points:
+                    try:
+                        gpt = math_utils.bary_to_cart(gp.composition, is_inv)
+                    except Exception:
+                        continue
+                    self.ax.plot(
+                        gpt[0], gpt[1],
+                        marker=ms.marker_symbol,
+                        color=ms.color,
+                        markersize=ms.size,
+                        zorder=ZORDER_COMPS,
+                        linestyle='None',
+                    )
+
         # 4. Составы (Точки и метки)
         for comp in project.compositions:
             try:
