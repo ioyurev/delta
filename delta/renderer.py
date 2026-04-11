@@ -374,7 +374,17 @@ class ProjectRenderer:
     def _valid_region_cart(
         self, region: List[Composition], is_inv: bool
     ) -> List[tuple]:
-        """Converts display_region compositions to Cartesian; returns list if ≥ 3 valid."""
+        """
+        Converts display_region compositions to Cartesian.
+
+        Points are re-ordered by angle from centroid (convex-hull-like sort)
+        so the polygon is always non-self-intersecting regardless of the order
+        the user entered them.  The result is then forced to CCW winding so
+        that reversing it for the inner boundary of the donut PathPatch
+        produces the correct CW hole.
+
+        Returns empty list when fewer than 3 valid points are available.
+        """
         pts = []
         for comp in region:
             try:
@@ -384,7 +394,25 @@ class ProjectRenderer:
                 pts.append((float(pt[0]), float(pt[1])))
             except Exception:
                 continue
-        return pts if len(pts) >= 3 else []
+        if len(pts) < 3:
+            return []
+
+        # Sort by angle from centroid → convex, non-self-intersecting polygon
+        pts_arr = np.array(pts)
+        cx, cy = pts_arr[:, 0].mean(), pts_arr[:, 1].mean()
+        angles = np.arctan2(pts_arr[:, 1] - cy, pts_arr[:, 0] - cx)
+        pts = [pts[i] for i in np.argsort(angles)]
+
+        # Ensure CCW winding (positive signed area via shoelace)
+        n = len(pts)
+        area2 = sum(
+            pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]
+            for i in range(n)
+        )
+        if area2 < 0:
+            pts.reverse()
+
+        return pts
 
     def _draw_region_mask(self, region_cart: List[tuple]) -> None:
         """Draws a white mask covering everything outside the display region polygon."""
