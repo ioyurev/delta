@@ -390,20 +390,26 @@ class AnalysisPanel(QWidget):
                 else:
                     self.lbl_info.setStyleSheet(self._get_default_style())
 
-                val_a = 1.0 - t
-                val_b = t
-                
+                # Атомные доли вклада (позиция вдоль линии в пространстве атомных долей)
+                atom_a = 1.0 - t
+                atom_b = t
+
+                # Истинные молярные доли соединений с учётом числа атомов в ф.е.
+                n_a = p_a.composition.total
+                n_b = p_b.composition.total
+                mol_a, mol_b = math_utils.atom_fracs_to_mole_fracs([atom_a, atom_b], [n_a, n_b])
+
                 d = DISPLAY_DECIMALS_ANALYSIS
                 res_text = (
                     f"Lever Rule (mol.%):\n"
-                    f"  {p_a.name:<10} : {val_a*100:.{d}f}%\n"
-                    f"  {p_b.name:<10} : {val_b*100:.{d}f}%\n"
+                    f"  {p_a.name:<10} : {mol_a*100:.{d}f}%\n"
+                    f"  {p_b.name:<10} : {mol_b*100:.{d}f}%\n"
                     f"  {'─' * 20}\n"
-                    f"  {'Total':<10} : {(val_a + val_b)*100:.{d}f}%"
+                    f"  {'Total':<10} : {(mol_a + mol_b)*100:.{d}f}%"
                 )
-                
+
                 if not is_mouse_source:
-                    ints = math_utils.find_integer_ratio([val_a, val_b])
+                    ints = math_utils.find_integer_ratio([mol_a, mol_b])
                     if ints:
                         res_text += (f"\n\nStoichiometry (molar ratio):\n"
                                      f"  {p_a.name:<10} : {ints[0]}\n"
@@ -468,19 +474,27 @@ class AnalysisPanel(QWidget):
                 
                 self.lbl_info.setStyleSheet(self._get_default_style())
 
+                # Истинные молярные доли с учётом числа атомов в формульной единице
+                n_a = p_a.composition.total
+                n_b = p_b.composition.total
+                n_c = p_c.composition.total
+                mol_a, mol_b, mol_c = math_utils.atom_fracs_to_mole_fracs(
+                    [u, v, w], [n_a, n_b, n_c]
+                )
+
                 d = DISPLAY_DECIMALS_ANALYSIS
-                total = u + v + w
+                total = mol_a + mol_b + mol_c
                 res_text = (
                     f"Basis Fractions (mol.%):\n"
-                    f"  {p_a.name:<10} : {u*100:.{d}f}%\n"
-                    f"  {p_b.name:<10} : {v*100:.{d}f}%\n"
-                    f"  {p_c.name:<10} : {w*100:.{d}f}%\n"
+                    f"  {p_a.name:<10} : {mol_a*100:.{d}f}%\n"
+                    f"  {p_b.name:<10} : {mol_b*100:.{d}f}%\n"
+                    f"  {p_c.name:<10} : {mol_c*100:.{d}f}%\n"
                     f"  {'─' * 20}\n"
                     f"  {'Total':<10} : {total*100:.{d}f}%"
                 )
-                
+
                 if not is_mouse_source:
-                    ints = math_utils.find_integer_ratio([u, v, w])
+                    ints = math_utils.find_integer_ratio([mol_a, mol_b, mol_c])
                     if ints:
                         res_text += (f"\n\nStoichiometry (molar ratio):\n"
                                      f"  {p_a.name:<10} : {ints[0]}\n"

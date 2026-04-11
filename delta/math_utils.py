@@ -343,6 +343,37 @@ def _lcm(a: int, b: int) -> int:
     return abs(a * b) // gcd(a, b) if a and b else max(abs(a), abs(b))
 
 
+def atom_fracs_to_mole_fracs(atom_fracs: List[float], formula_sizes: List[float]) -> List[float]:
+    """
+    Конвертирует атомные доли в истинные молярные доли соединений.
+
+    В диаграмме Гиббса оси — атомные доли элементов. Параметр t правила рычага
+    описывает положение точки вдоль линии в пространстве атомных долей.
+    Это НЕ равно молярной доле соединения, если у соединений разное число
+    атомов в формульной единице.
+
+    Например, при смешении 50 моль SmS (2 ат./ф.е.) и 50 моль Gd2S3 (5 ат./ф.е.):
+    - AtomS от SmS: 100 из 350 → 28.6%   (это выдаёт наивный рычаг)
+    - Молярная доля SmS: 50/100 = 50%     (это правильный ответ)
+
+    Args:
+        atom_fracs: Атомные доли вклада каждого соединения (сумма ≈ 1)
+        formula_sizes: Число атомов в формульной единице для каждого соединения
+                       (composition.total)
+
+    Returns:
+        Истинные молярные доли (сумма = 1). Если размеры формульных единиц
+        одинаковы (например, все нормированы до суммы=1), результат совпадает
+        с входными атомными долями.
+    """
+    moles = [f / n if n > EPSILON_ZERO else 0.0
+             for f, n in zip(atom_fracs, formula_sizes)]
+    total = math.fsum(moles)
+    if total < EPSILON_ZERO:
+        return list(atom_fracs)
+    return [m / total for m in moles]
+
+
 def find_integer_ratio(floats: List[float]) -> List[int]:
     """
     Универсальный поиск целочисленного соотношения.

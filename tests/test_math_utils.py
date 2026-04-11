@@ -362,7 +362,48 @@ class TestCollinearity:
         p1 = Composition(a=0, b=0, c=0)  # Невалидный
         p2 = Composition(a=1, b=0, c=0)
         p3 = Composition(a=0, b=1, c=0)
-        
+
         # Не должно падать
         assert math_utils.are_compositions_collinear(p1, p2, p3)
         assert math_utils.get_triangle_area(p1, p2, p3) == 0.0
+
+
+class TestAtomFracsToMoleFracs:
+    """Тест конвертации атомных долей в молярные."""
+
+    def test_equal_formula_sizes_unchanged(self):
+        """Если формульные единицы одинаковы, результат не меняется."""
+        result = math_utils.atom_fracs_to_mole_fracs([0.6, 0.4], [1.0, 1.0])
+        assert abs(result[0] - 0.6) < 1e-9
+        assert abs(result[1] - 0.4) < 1e-9
+
+    def test_sms_gd2s3_lever_rule(self):
+        """
+        SmGd2S4 = 50% SmS + 50% Gd2S3 (по молям соединений).
+        SmS: total=2, Gd2S3: total=5.
+        В атомных долях SmGd2S4 находится при t≈5/7 от SmS к Gd2S3.
+        atom_a = 1 - 5/7 = 2/7, atom_b = 5/7
+        Конвертация должна дать mol_a = mol_b = 0.5.
+        """
+        t = 5.0 / 7.0
+        atom_a = 1.0 - t  # 2/7
+        atom_b = t        # 5/7
+        n_a = 2.0  # SmS: 1 Sm + 1 S
+        n_b = 5.0  # Gd2S3: 2 Gd + 3 S
+        mol_a, mol_b = math_utils.atom_fracs_to_mole_fracs([atom_a, atom_b], [n_a, n_b])
+        assert abs(mol_a - 0.5) < 1e-9
+        assert abs(mol_b - 0.5) < 1e-9
+
+    def test_ternary_equal_moles(self):
+        """Равные молярные доли трёх соединений с разными формульными единицами."""
+        # Соединения: A (n=1), B (n=2), C (n=3). По 1/3 моля каждого.
+        # Атомы: A=1, B=2, C=3, total=6
+        # Атомные доли: A=1/6, B=2/6, C=3/6
+        result = math_utils.atom_fracs_to_mole_fracs([1/6, 2/6, 3/6], [1.0, 2.0, 3.0])
+        for r in result:
+            assert abs(r - 1/3) < 1e-9
+
+    def test_fallback_on_zero_sizes(self):
+        """При нулевых формульных размерах возвращает исходные атомные доли."""
+        result = math_utils.atom_fracs_to_mole_fracs([0.5, 0.5], [0.0, 0.0])
+        assert result == [0.5, 0.5]

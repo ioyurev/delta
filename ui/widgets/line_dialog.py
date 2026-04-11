@@ -2,6 +2,7 @@ from PySide6.QtWidgets import QFormLayout, QComboBox, QPushButton, QGroupBox, QM
 from ui.widgets.base_dialog import BaseFormDialog
 from ui.widgets.helpers import create_line_width_spin, ColorPickerButton
 from delta.models import TieLine, NamedComposition, VisualStyle
+from delta.constants import LINE_WIDTH_DEFAULT
 from typing import Optional
 from dataclasses import dataclass
 
@@ -23,8 +24,8 @@ class LineDialog(BaseFormDialog[LineDialogResult]):
         self._current_line = current_line
         self._line_uid = current_line.uid if current_line else None
         self._initial_style = (
-            current_line.style if current_line 
-            else VisualStyle()
+            current_line.style if current_line
+            else VisualStyle(size=LINE_WIDTH_DEFAULT)
         )
         super().__init__("Line Settings", width=350, parent=parent)
     
