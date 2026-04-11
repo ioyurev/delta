@@ -269,6 +269,7 @@ class CurveLine(BaseModel):
     start_uid: str = ""
     end_uid: str = ""
     guide_points: List[GuidePoint] = Field(default_factory=list)
+    poly_degree: int = Field(default=3, ge=2, le=5)
     style: VisualStyle = Field(default_factory=lambda: VisualStyle(size=LINE_WIDTH_DEFAULT))
     arrow: ArrowSettings = Field(default_factory=ArrowSettings)
 

@@ -448,7 +448,11 @@ class MainWindow(QMainWindow):
     # =========================================================================
 
     def _on_curve_line_add_req(self):
-        dlg = CurveLineDialog(self.controller.get_all_compositions(), parent=self)
+        dlg = CurveLineDialog(
+            self.controller.get_all_compositions(),
+            components=self.controller.get_components(),
+            parent=self,
+        )
         self._attach_curve_dlg(dlg)
         dlg.show()
 
@@ -459,6 +463,7 @@ class MainWindow(QMainWindow):
         dlg = CurveLineDialog(
             self.controller.get_all_compositions(),
             current_line=cline,
+            components=self.controller.get_components(),
             parent=self,
         )
         self._attach_curve_dlg(dlg)
@@ -511,7 +516,7 @@ class MainWindow(QMainWindow):
                     size=data.width,
                 ))
                 self.controller.update_curve_line_arrow(data.uid, data.arrow)
-                self.controller.update_curve_line_guides(data.uid, data.guide_points)
+                self.controller.update_curve_line_guides(data.uid, data.guide_points, data.poly_degree)
                 self.statusBar().showMessage("Curve line updated", 3000)
             else:
                 # Создание
@@ -522,7 +527,7 @@ class MainWindow(QMainWindow):
                     size=data.width,
                 ))
                 self.controller.update_curve_line_arrow(uid, data.arrow)
-                self.controller.update_curve_line_guides(uid, data.guide_points)
+                self.controller.update_curve_line_guides(uid, data.guide_points, data.poly_degree)
                 self.statusBar().showMessage("Curve line created", 3000)
         except (ValidationError, EntityNotFoundError) as e:
             QMessageBox.warning(self, "Error", str(e))

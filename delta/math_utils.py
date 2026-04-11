@@ -540,58 +540,81 @@ def are_compositions_collinear(
 
 
 def fit_curve_through_points(
-    points_cart: List[np.ndarray],
+    start: np.ndarray,
+    guide_pts: List[np.ndarray],
+    end: np.ndarray,
     n_samples: int = 300,
+    poly_degree: int = 3,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Строит параметрический кубический сплайн через все заданные точки.
+    Строит параметрическую кривую с жёсткими endpoint-ограничениями.
 
-    Endpoint-точки (первая и последняя) проходятся ТОЧНО.
-    Guide-точки (промежуточные) тоже интерполируются — пользователь ставит
-    их туда, куда хочет провести кривую.
+    P(t) = (1-t)*start + t*end + t*(1-t)*Q(t)
+
+    Где Q — полином степени (poly_degree - 2), подбираемый методом
+    наименьших квадратов по guide_pts. Endpoints (t=0, t=1) проходятся
+    ТОЧНО — без отклонений. Guide-точки АППРОКСИМИРУЮТСЯ.
 
     Args:
-        points_cart: Список 2D точек [np.array([x, y]), ...], минимум 2 шт.
-        n_samples:   Количество точек в выходном массиве (для ax.plot).
+        start:       Начальная точка (декартовы), t=0, проходится точно.
+        guide_pts:   Промежуточные guide-точки — аппроксимируются (не интерполируются).
+        end:         Конечная точка (декартовы), t=1, проходится точно.
+        n_samples:   Число точек в выходном массиве (для ax.plot).
+        poly_degree: Степень полинома (2=квадратичный, 3=кубический, …, 5=5-й степени).
 
     Returns:
         (xs, ys) — массивы NumPy длиной n_samples.
-
-    Raises:
-        ValueError: Если points_cart содержит менее 2 точек.
     """
-    if len(points_cart) < 2:
-        raise ValueError("fit_curve_through_points: need at least 2 points")
+    p0 = np.asarray(start, dtype=float)
+    p1 = np.asarray(end, dtype=float)
+    t_eval = np.linspace(0.0, 1.0, n_samples)
 
-    pts = np.array(points_cart, dtype=float)  # shape (n, 2)
-
-    if len(pts) == 2:
-        # Прямая — не нужен scipy
-        xs = np.linspace(pts[0, 0], pts[1, 0], n_samples)
-        ys = np.linspace(pts[0, 1], pts[1, 1], n_samples)
+    if not guide_pts:
+        # Нет guide-точек → прямая линия
+        xs = (1.0 - t_eval) * p0[0] + t_eval * p1[0]
+        ys = (1.0 - t_eval) * p0[1] + t_eval * p1[1]
         return xs, ys
 
-    # Arc-length parameterization: t[i] = cumulative chord distance
-    diffs = np.diff(pts, axis=0)
+    # Arc-length параметризация: t[i] = нормализованная длина дуги от start
+    guide_arr = np.array(guide_pts, dtype=float)          # (N, 2)
+    all_pts = np.vstack([p0[np.newaxis], guide_arr, p1[np.newaxis]])
+    diffs = np.diff(all_pts, axis=0)
     seg_lens = np.sqrt((diffs ** 2).sum(axis=1))
-    t = np.zeros(len(pts))
-    t[1:] = np.cumsum(seg_lens)
+    t_all = np.zeros(len(all_pts))
+    t_all[1:] = np.cumsum(seg_lens)
+    total = t_all[-1]
 
-    total = t[-1]
     if total < EPSILON_ZERO:
         # Все точки практически совпадают
-        xs = np.full(n_samples, pts[0, 0])
-        ys = np.full(n_samples, pts[0, 1])
+        xs = np.full(n_samples, p0[0])
+        ys = np.full(n_samples, p0[1])
         return xs, ys
 
-    t /= total  # нормализация к [0, 1]
+    t_all /= total              # t_all[0]=0, t_all[-1]=1
+    t_g = t_all[1:-1]           # t-значения guide-точек
 
-    from scipy.interpolate import CubicSpline  # type: ignore[import-untyped]
-    cs_x = CubicSpline(t, pts[:, 0])
-    cs_y = CubicSpline(t, pts[:, 1])
+    # Остатки: guide - линейная интерполяция между p0 и p1
+    linear_g = np.outer(1.0 - t_g, p0) + np.outer(t_g, p1)  # (N, 2)
+    residuals = guide_arr - linear_g                           # (N, 2)
 
-    t_eval = np.linspace(0.0, 1.0, n_samples)
-    return cs_x(t_eval), cs_y(t_eval)
+    # Матрица системы: A[i,k] = t_i*(1-t_i) * t_i^k  для k=0..q_degree
+    q_degree = max(0, poly_degree - 2)
+    N = len(t_g)
+    A = np.zeros((N, q_degree + 1))
+    for k in range(q_degree + 1):
+        A[:, k] = t_g * (1.0 - t_g) * (t_g ** k)
+
+    # МНК: A @ coefs ≈ residuals  →  coefs shape (q_degree+1, 2)
+    coefs, _, _, _ = np.linalg.lstsq(A, residuals, rcond=None)
+
+    # Вычисляем P(t) в n_samples точках
+    linear_eval = np.outer(1.0 - t_eval, p0) + np.outer(t_eval, p1)  # (n, 2)
+    Q_eval = np.zeros((n_samples, 2))
+    for k in range(q_degree + 1):
+        Q_eval += np.outer(t_eval * (1.0 - t_eval) * (t_eval ** k), coefs[k])
+
+    pts = linear_eval + Q_eval
+    return pts[:, 0], pts[:, 1]
 
 
 def get_triangle_area(p1: Composition, p2: Composition, p3: Composition) -> float:

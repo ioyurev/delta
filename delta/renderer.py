@@ -98,10 +98,12 @@ class ProjectRenderer:
                 math_utils.bary_to_cart(gp.composition, is_inv)
                 for gp in cline.guide_points
             ]
-            all_pts = [p_start, *guide_pts, p_end]
 
             try:
-                xs, ys = math_utils.fit_curve_through_points(all_pts)
+                xs, ys = math_utils.fit_curve_through_points(
+                    p_start, guide_pts, p_end,
+                    poly_degree=cline.poly_degree,
+                )
             except Exception:
                 # Fallback: прямая линия
                 xs = np.linspace(p_start[0], p_end[0], 300)

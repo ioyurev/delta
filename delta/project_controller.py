@@ -4,7 +4,7 @@ Qt-обёртка над ProjectManager для интеграции с GUI.
 Делегирует всю логику в ProjectManager, добавляя Qt-сигналы.
 """
 
-from typing import List
+from typing import List, Optional
 from PySide6.QtCore import QObject, Signal
 
 from delta.project_manager import ProjectManager
@@ -129,8 +129,10 @@ class ProjectController(QObject):
     def update_curve_line_arrow(self, uid: str, arrow: ArrowSettings) -> None:
         self._manager.update_curve_line_arrow(uid, arrow)
 
-    def update_curve_line_guides(self, uid: str, guides: List[GuidePoint]) -> None:
-        self._manager.update_curve_line_guides(uid, guides)
+    def update_curve_line_guides(
+        self, uid: str, guides: List[GuidePoint], poly_degree: Optional[int] = None
+    ) -> None:
+        self._manager.update_curve_line_guides(uid, guides, poly_degree)
 
     def delete_curve_line(self, uid: str) -> None:
         self._manager.delete_curve_line(uid)

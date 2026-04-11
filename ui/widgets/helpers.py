@@ -1,8 +1,8 @@
 """Вспомогательные функции и виджеты для UI"""
 
-from PySide6.QtWidgets import QDoubleSpinBox, QMenu, QComboBox, QPushButton, QColorDialog, QApplication
+from PySide6.QtWidgets import QDoubleSpinBox, QMenu, QComboBox, QPushButton, QColorDialog, QApplication, QTableWidget
 from PySide6.QtCore import Signal, Qt
-from PySide6.QtGui import QColor, QCursor, QPalette
+from PySide6.QtGui import QColor, QCursor, QPalette, QKeyEvent
 from typing import Callable, Optional, TypeVar, ParamSpec, Sequence
 from functools import wraps
 from contextlib import contextmanager
@@ -23,6 +23,40 @@ T = TypeVar('T')
 # =============================================================================
 # ВИДЖЕТЫ
 # =============================================================================
+
+class CopyableTableWidget(QTableWidget):
+    """
+    QTableWidget с поддержкой Ctrl+C: копирует все выделенные ячейки
+    в буфер обмена в виде TSV-таблицы (Tab-separated values).
+    """
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if (event.key() == Qt.Key.Key_C
+                and event.modifiers() == Qt.KeyboardModifier.ControlModifier):
+            self._copy_selection()
+        else:
+            super().keyPressEvent(event)
+
+    def _copy_selection(self) -> None:
+        ranges = self.selectedRanges()
+        if not ranges:
+            return
+
+        min_row = min(r.topRow() for r in ranges)
+        max_row = max(r.bottomRow() for r in ranges)
+        min_col = min(r.leftColumn() for r in ranges)
+        max_col = max(r.rightColumn() for r in ranges)
+
+        lines: list[str] = []
+        for row in range(min_row, max_row + 1):
+            cells: list[str] = []
+            for col in range(min_col, max_col + 1):
+                item = self.item(row, col)
+                cells.append(item.text() if item else "")
+            lines.append("\t".join(cells))
+
+        QApplication.clipboard().setText("\n".join(lines))
+
 
 class ColorPickerButton(QPushButton):
     """

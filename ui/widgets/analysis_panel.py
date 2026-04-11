@@ -1,7 +1,7 @@
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QLabel, 
-                               QComboBox, QFormLayout, QRadioButton, QButtonGroup, 
-                               QHBoxLayout, QTableWidget, 
-                               QTableWidgetItem, QHeaderView, QApplication)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QLabel,
+                               QComboBox, QFormLayout, QRadioButton, QButtonGroup,
+                               QHBoxLayout, QTableWidgetItem, QHeaderView, QApplication)
+from ui.widgets.helpers import CopyableTableWidget
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QBrush
 from delta.models import Composition, RenderOverlay, OverlayLine, NamedComposition, CompositionError
@@ -137,7 +137,7 @@ class AnalysisPanel(QWidget):
         v_m.setContentsMargins(0, 5, 0, 5)
         
         # Настройка таблицы
-        self.table_manual = QTableWidget(1, 3)
+        self.table_manual = CopyableTableWidget(1, 3)
         self.table_manual.setFixedHeight(60) # Высота одной строки + заголовок
         self.table_manual.verticalHeader().setVisible(False) # Скрываем номера строк
         self.table_manual.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)

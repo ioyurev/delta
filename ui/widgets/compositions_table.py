@@ -1,11 +1,11 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
                                QLabel, QLineEdit, QPushButton, QCheckBox, 
                                QDoubleSpinBox, QTableWidgetItem, QHeaderView, 
-                               QMenu, QTableWidget, QApplication)
+                               QMenu, QApplication)
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QBrush, QKeyEvent
 from delta.models import ProjectData, CompositionUpdate, Composition
-from ui.widgets.helpers import get_cell_highlight_color
+from ui.widgets.helpers import get_cell_highlight_color, CopyableTableWidget
 from delta.constants import (
     COMP_NAME_MAX_LENGTH, 
     DISPLAY_DECIMALS_TABLE, 
@@ -118,7 +118,7 @@ class CompositionsTable(QWidget):
         layout.addWidget(gb_sys)
 
         # --- 2. Table ---
-        self.table = QTableWidget()
+        self.table = CopyableTableWidget()
         self.table.setColumnCount(4)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._on_item_changed)

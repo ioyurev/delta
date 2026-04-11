@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QComboBox, QPushButton, QCheckBox,
-    QSpinBox, QTableWidget, QHeaderView,
+    QSpinBox, QHeaderView,
     QMessageBox, QLabel, QDoubleSpinBox, QSizePolicy,
 )
 
@@ -26,7 +26,7 @@ from delta.models import (
     CurveLine, NamedComposition, VisualStyle, ArrowSettings, GuidePoint, Composition,
 )
 from delta.constants import LINE_WIDTH_DEFAULT, ARROW_COUNT_MIN, ARROW_COUNT_MAX
-from ui.widgets.helpers import create_line_width_spin, ColorPickerButton
+from ui.widgets.helpers import create_line_width_spin, ColorPickerButton, CopyableTableWidget
 
 if TYPE_CHECKING:
     pass
@@ -41,6 +41,7 @@ class CurveLineDialogResult:
     color: str
     line_style: str
     width: float
+    poly_degree: int = 3
     arrow: ArrowSettings = field(default_factory=ArrowSettings)
 
 
@@ -59,12 +60,14 @@ class CurveLineDialog(QDialog):
         self,
         compositions: List[NamedComposition],
         current_line: Optional[CurveLine] = None,
+        components: Optional[List[str]] = None,
         parent=None,
     ):
         super().__init__(parent)
         self._compositions = compositions
         self._current_line = current_line
         self._line_uid = current_line.uid if current_line else None
+        self._components = components if components else ["A", "B", "C"]
 
         self._initial_style = (
             current_line.style if current_line
@@ -114,6 +117,26 @@ class CurveLineDialog(QDialog):
         self.sb_width.setToolTip("Line thickness in points")
         form.addRow("Width:", self.sb_width)
 
+        self.cb_degree = QComboBox()
+        degree_items = [
+            ("Quadratic (2)", 2),
+            ("Cubic (3)", 3),
+            ("Degree 4", 4),
+            ("Degree 5", 5),
+        ]
+        for label, val in degree_items:
+            self.cb_degree.addItem(label, val)
+        current_degree = self._current_line.poly_degree if self._current_line else 3
+        for i in range(self.cb_degree.count()):
+            if self.cb_degree.itemData(i) == current_degree:
+                self.cb_degree.setCurrentIndex(i)
+                break
+        self.cb_degree.setToolTip(
+            "Polynomial degree for curve fitting.\n"
+            "Higher degree = more flexible curve, but may oscillate with few guide points."
+        )
+        form.addRow("Degree:", self.cb_degree)
+
         gb.setLayout(form)
         self._layout.addWidget(gb)
 
@@ -147,12 +170,13 @@ class CurveLineDialog(QDialog):
         self._layout.addWidget(gb)
 
     def _init_guide_points(self) -> None:
-        gb = QGroupBox("Guide Points  (curve passes through all)")
+        gb = QGroupBox("Guide Points  (approximated, endpoints are fixed)")
         vbox = QVBoxLayout()
 
-        # Таблица: # | A | B | C | [delete]
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["A", "B", "C", ""])
+        # Таблица: # | comp_A | comp_B | comp_C | [delete]
+        self.table = CopyableTableWidget(0, 4)
+        col_labels = list(self._components) + [""]
+        self.table.setHorizontalHeaderLabels(col_labels)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -341,6 +365,7 @@ class CurveLineDialog(QDialog):
             color=self.btn_color.color(),
             line_style=self.cb_style.currentData(),
             width=self.sb_width.value(),
+            poly_degree=self.cb_degree.currentData(),
             arrow=ArrowSettings(
                 enabled=self.chk_arrows.isChecked(),
                 direction=self.cb_arrow_dir.currentData(),

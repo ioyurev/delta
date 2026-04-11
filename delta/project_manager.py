@@ -528,10 +528,14 @@ class ProjectManager:
         cline.arrow = arrow
         self._notify_change(save_undo=False)
 
-    def update_curve_line_guides(self, uid: str, guides: List[GuidePoint]) -> None:
+    def update_curve_line_guides(
+        self, uid: str, guides: List[GuidePoint], poly_degree: Optional[int] = None
+    ) -> None:
         cline = self.get_curve_line(uid)
         self._save_undo_before_change()
         cline.guide_points = list(guides)
+        if poly_degree is not None:
+            cline.poly_degree = poly_degree
         self._notify_change(save_undo=False)
 
     def delete_curve_line(self, uid: str) -> None:
