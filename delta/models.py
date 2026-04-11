@@ -295,6 +295,54 @@ class GridSettings(BaseModel):
 
 
 # =============================================================================
+# TEXT ANNOTATION
+# =============================================================================
+
+class TextAnnotation(BaseModel):
+    """Текстовая аннотация на диаграмме."""
+    model_config = ConfigDict(validate_assignment=True)
+
+    uid: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    text: str = "Label"
+    position: Composition = Field(default_factory=lambda: Composition(a=33.0, b=33.0, c=34.0))
+    font_size: float = Field(default=10.0, ge=4.0, le=72.0)
+    color: str = "#000000"
+    italic: bool = False
+    bold: bool = False
+    ha: str = "center"   # left | center | right
+    va: str = "center"   # top | center | bottom | baseline
+    box_enabled: bool = False
+    box_facecolor: str = "#ffffff"
+    box_edgecolor: str = "#000000"
+    box_alpha: float = Field(default=0.8, ge=0.0, le=1.0)
+    box_pad: float = Field(default=0.3, ge=0.0, le=5.0)
+    visible: bool = True
+    arrow_enabled: bool = False
+    arrow_target: Optional[Composition] = None
+    arrow_color: str = "#000000"
+
+    @field_validator('color', 'box_facecolor', 'box_edgecolor', 'arrow_color')
+    @classmethod
+    def validate_color(cls, v: str) -> str:
+        v = v.strip()
+        if not v.startswith('#') or len(v) not in (4, 7):
+            if len(v) == 6 and all(c in '0123456789abcdefABCDEF' for c in v):
+                return f"#{v}"
+            return "#000000"
+        return v
+
+    @field_validator('ha')
+    @classmethod
+    def validate_ha(cls, v: str) -> str:
+        return v if v in ('left', 'center', 'right') else 'center'
+
+    @field_validator('va')
+    @classmethod
+    def validate_va(cls, v: str) -> str:
+        return v if v in ('top', 'center', 'bottom', 'baseline') else 'center'
+
+
+# =============================================================================
 # PROJECT DATA
 # =============================================================================
 
@@ -311,6 +359,7 @@ class ProjectData(BaseModel):
     lock_aspect: bool = True
     display_region: List[Composition] = Field(default_factory=list)
     display_region_enabled: bool = False
+    annotations: List[TextAnnotation] = Field(default_factory=list)
     vertex_labels_pos: Dict[str, Tuple[float, float]] = Field(default_factory=dict)
 
     @field_validator('components')

@@ -4,13 +4,12 @@ from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from matplotlib.patches import PathPatch
 from matplotlib.path import Path
-from typing import List, Literal
+from typing import Any, List, Literal
 from delta import math_utils
 from delta.models import ProjectData, RenderOverlay, Composition, ArrowSettings
 from delta.constants import (
     COLOR_BACKGROUND, COLOR_TERNARY_TRIANGLE, COLOR_PROJECTION,
-    COLOR_INTERSECTION, ZORDER_GRID, ZORDER_LINES, ZORDER_COMPS,
-    ZORDER_MASK, ZORDER_OVERLAY, ZORDER_PROJECTION, ZORDER_INTERSECTION,
+    COLOR_INTERSECTION, ZORDER_GRID, ZORDER_LINES, ZORDER_MASK, ZORDER_OVERLAY, ZORDER_PROJECTION, ZORDER_INTERSECTION,
     VERTEX_LABEL_OFFSET, COMP_LABEL_OFFSET, TRIANGLE_HEIGHT
 )
 
@@ -140,7 +139,7 @@ class ProjectRenderer:
                         marker=ms.marker_symbol,
                         color=ms.color,
                         markersize=ms.size,
-                        zorder=ZORDER_COMPS,
+                        zorder=ZORDER_MASK + 1,
                         linestyle='None',
                     )
 
@@ -158,7 +157,7 @@ class ProjectRenderer:
                     marker=comp.style.marker_symbol,
                     color=comp.style.color,
                     markersize=comp.style.size,
-                    zorder=ZORDER_COMPS,
+                    zorder=ZORDER_MASK + 1,
                     linestyle='None'
                 )
 
@@ -174,7 +173,7 @@ class ProjectRenderer:
 
                 self.ax.text(
                     txt_x, txt_y, comp.name,
-                    ha='center', fontweight='bold',
+                    ha='center',
                     fontsize=FONT_SIZE,
                     gid=comp.uid, picker=True,
                     clip_on=False,
@@ -201,6 +200,7 @@ class ProjectRenderer:
         )
         if region_cart:
             self._draw_region_mask(region_cart)
+            self._draw_region_border(region_cart)
             rx = [pt[0] for pt in region_cart]
             ry = [pt[1] for pt in region_cart]
             pad = 0.05
@@ -211,6 +211,10 @@ class ProjectRenderer:
             h = math_utils.H
             self.ax.set_xlim(-padding, 1.0 + padding)
             self.ax.set_ylim(-padding, h + padding)
+
+        # 9. Текстовые аннотации (всегда поверх маски)
+        if project.annotations:
+            self._draw_annotations(project.annotations, is_inv)
 
         self.ax.axis('off')
 
@@ -438,6 +442,77 @@ class ProjectRenderer:
         )
         self.ax.add_patch(patch)
 
+    def _draw_region_border(self, region_cart: List[tuple]) -> None:
+        """Draws a 2px border outline around the display region polygon."""
+        xs = [pt[0] for pt in region_cart] + [region_cart[0][0]]
+        ys = [pt[1] for pt in region_cart] + [region_cart[0][1]]
+        self.ax.plot(
+            xs, ys,
+            color='black', linewidth=2,
+            zorder=ZORDER_MASK + 1, clip_on=False,
+        )
+
+    def _draw_annotations(self, annotations, is_inv: bool) -> None:
+        """Draws text annotations above everything (zorder = ZORDER_MASK + 1)."""
+        for ann in annotations:
+            if not ann.visible:
+                continue
+            try:
+                pos = math_utils.bary_to_cart(ann.position, is_inv)
+            except Exception:
+                continue
+
+            font_kw = dict(
+                fontsize=ann.font_size,
+                color=ann.color,
+                fontstyle='italic' if ann.italic else 'normal',
+                fontweight='bold' if ann.bold else 'normal',
+                ha=ann.ha,
+                va=ann.va,
+            )
+            bbox_kw = None
+            if ann.box_enabled:
+                bbox_kw = dict(
+                    boxstyle=f'round,pad={ann.box_pad}',
+                    facecolor=ann.box_facecolor,
+                    edgecolor=ann.box_edgecolor,
+                    alpha=ann.box_alpha,
+                )
+
+            target_xy = None
+            if ann.arrow_enabled and ann.arrow_target is not None:
+                try:
+                    t = math_utils.bary_to_cart(ann.arrow_target, is_inv)
+                    target_xy = (float(t[0]), float(t[1]))
+                except Exception:
+                    target_xy = None
+
+            common_kw: dict[str, Any] = dict(
+                gid=f"annotation_{ann.uid}",
+                zorder=ZORDER_MASK + 1,
+                clip_on=False,
+            )
+            if bbox_kw is not None:
+                common_kw['bbox'] = bbox_kw
+
+            if target_xy is not None:
+                self.ax.annotate(
+                    ann.text,
+                    xy=target_xy,
+                    xytext=(float(pos[0]), float(pos[1])),
+                    xycoords='data', textcoords='data',
+                    arrowprops=dict(arrowstyle='->', color=ann.arrow_color),
+                    **font_kw,
+                    **common_kw,
+                )
+            else:
+                self.ax.text(
+                    float(pos[0]), float(pos[1]),
+                    ann.text,
+                    **font_kw,
+                    **common_kw,
+                )
+
     def _draw_vertices(self, project: ProjectData):
         is_inv = project.is_inverted
         vertices = math_utils.get_vertices(is_inv)
@@ -465,7 +540,7 @@ class ProjectRenderer:
             self.ax.text(
                 x, y, names[idx],
                 ha=current_ha, va=current_va,
-                fontweight='bold', fontsize=FONT_SIZE,
+                fontsize=FONT_SIZE,
                 gid=f"vertex_{idx}", picker=True,
                 zorder=ZORDER_MASK + 1,
             )

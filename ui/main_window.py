@@ -26,7 +26,9 @@ from ui.widgets.analysis_panel import AnalysisPanel
 from ui.widgets.about_dialog import AboutDialog
 from ui.widgets.docs_viewer import DocsViewer
 from ui.widgets.display_region_widget import DisplayRegionWidget
+from ui.widgets.annotation_widget import AnnotationWidget
 from ui.widgets.helpers import handle_entity_errors, build_menu, wait_cursor, get_overlay_style
+from delta import math_utils
 
 
 class MainWindow(QMainWindow):
@@ -184,6 +186,10 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.region_widget, "Region")
         tabs.setTabToolTip(3, "Restrict diagram display area to a custom polygon")
 
+        self.annotation_widget = AnnotationWidget()
+        tabs.addTab(self.annotation_widget, "Annotations")
+        tabs.setTabToolTip(4, "Place text annotations on the diagram")
+
         # Обновление при смене вкладки
         tabs.currentChanged.connect(self._refresh_ui)
 
@@ -255,6 +261,12 @@ class MainWindow(QMainWindow):
         self.region_widget.region_changed.connect(self._on_region_changed)
         self.region_widget.enabled_changed.connect(self._on_region_enabled_changed)
 
+        # Annotations
+        self.annotation_widget.request_add.connect(self._on_annotation_add)
+        self.annotation_widget.request_remove.connect(self._on_annotation_remove)
+        self.annotation_widget.annotation_changed.connect(self._on_annotation_changed)
+        self.canvas.text_annotation_dropped.connect(self._on_text_annotation_dropped)
+
     def _on_validation_error(self, message: str):
         """Показывает ошибку/предупреждение валидации в StatusBar"""
         # Для заметок (Note:) показываем дольше
@@ -279,6 +291,7 @@ class MainWindow(QMainWindow):
         self.table_widget.update_view(project_data)
         self.lines_widget.update_view(project_data)
         self.region_widget.update_view(project_data)
+        self.annotation_widget.update_view(project_data)
 
         # Применяем lock_aspect из данных проекта
         locked = project_data.lock_aspect
@@ -627,6 +640,27 @@ class MainWindow(QMainWindow):
 
     def _on_region_enabled_changed(self, enabled: bool) -> None:
         self.controller.update_display_region_enabled(enabled)
+
+    def _on_annotation_add(self) -> None:
+        uid = self.controller.create_annotation()
+        self.statusBar().showMessage("Annotation added", 2000)
+        # Select the new item — update_view will be triggered by data_changed
+        self._last_added_annotation_uid = uid
+
+    def _on_annotation_remove(self, uid: str) -> None:
+        self.controller.delete_annotation(uid)
+        self.statusBar().showMessage("Annotation removed", 2000)
+
+    @handle_entity_errors
+    def _on_annotation_changed(self, uid: str, fields: dict) -> None:
+        self.controller.update_annotation(uid, **fields)
+
+    @handle_entity_errors
+    def _on_text_annotation_dropped(self, uid: str, x: float, y: float) -> None:
+        """Аннотация перетащена на холсте — конвертируем cart→bary и сохраняем позицию."""
+        is_inv = self.controller.project_data.is_inverted
+        new_pos = math_utils.cart_to_bary(x, y, is_inv)
+        self.controller.update_annotation(uid, position=new_pos)
 
     # =========================================================================
     # УПРАВЛЕНИЕ СОСТОЯНИЕМ ОКНА

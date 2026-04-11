@@ -18,6 +18,7 @@ class CanvasInteractor(QObject):
     mouse_moved = Signal(Composition)
     annotation_dropped = Signal(str, float, float)
     vertex_label_dropped = Signal(int, float, float)
+    text_annotation_dropped = Signal(str, float, float)
     # Испускается в режиме GUIDE_PICK при клике по холсту
     guide_point_picked = Signal(Composition)
 
@@ -137,5 +138,8 @@ class CanvasInteractor(QObject):
         if uid.startswith("vertex_"):
             idx = int(uid.split("_")[1])
             self.vertex_label_dropped.emit(idx, x, y)
+        elif uid.startswith("annotation_"):
+            ann_uid = uid[len("annotation_"):]
+            self.text_annotation_dropped.emit(ann_uid, x, y)
         else:
             self.annotation_dropped.emit(uid, x, y)

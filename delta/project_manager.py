@@ -12,7 +12,8 @@ from pydantic import ValidationError as PydanticValidationError
 
 from delta.models import (
     ProjectData, NamedComposition, TieLine, CurveLine, GuidePoint, Composition,
-    CompositionUpdate, StyleUpdate, ArrowSettings, IntersectionResult, IntersectionStatus
+    CompositionUpdate, StyleUpdate, ArrowSettings, IntersectionResult, IntersectionStatus,
+    TextAnnotation,
 )
 from delta import math_utils
 from delta.constants import EPSILON_BOUNDARY
@@ -68,6 +69,7 @@ class ProjectManager:
         self._comp_map: Dict[str, NamedComposition] = {}
         self._line_map: Dict[str, TieLine] = {}
         self._curve_map: Dict[str, CurveLine] = {}
+        self._annotation_map: Dict[str, TextAnnotation] = {}
         
         # Режим пакетной обработки (подавляет уведомления)
         self._batch_mode = False
@@ -305,6 +307,47 @@ class ProjectManager:
     def update_display_region_enabled(self, enabled: bool) -> None:
         self._save_undo_before_change()
         self._project.display_region_enabled = enabled
+        self._notify_change(save_undo=False)
+
+    # =========================================================================
+    # АННОТАЦИИ
+    # =========================================================================
+
+    def create_annotation(
+        self,
+        text: str = "Label",
+        a: float = 33.0,
+        b: float = 33.0,
+        c: float = 34.0,
+    ) -> str:
+        ann = TextAnnotation(text=text, position=Composition(a=a, b=b, c=c))
+        self._save_undo_before_change()
+        self._project.annotations.append(ann)
+        self._annotation_map[ann.uid] = ann
+        self._notify_change(save_undo=False)
+        return ann.uid
+
+    def get_annotation(self, uid: str) -> TextAnnotation:
+        ann = self._annotation_map.get(uid)
+        if ann is None:
+            raise EntityNotFoundError("Annotation", uid)
+        return ann
+
+    def find_annotation(self, uid: str) -> Optional[TextAnnotation]:
+        return self._annotation_map.get(uid)
+
+    def update_annotation(self, uid: str, **fields) -> None:
+        ann = self.get_annotation(uid)
+        self._save_undo_before_change()
+        for k, v in fields.items():
+            setattr(ann, k, v)
+        self._notify_change(save_undo=False)
+
+    def delete_annotation(self, uid: str) -> None:
+        ann = self.get_annotation(uid)
+        self._save_undo_before_change()
+        self._project.annotations.remove(ann)
+        del self._annotation_map[uid]
         self._notify_change(save_undo=False)
 
     def update_view_mode(self, is_inverted: bool) -> None:
@@ -691,6 +734,7 @@ class ProjectManager:
         self._comp_map = {comp.uid: comp for comp in self._project.compositions}
         self._line_map = {line.uid: line for line in self._project.lines}
         self._curve_map = {c.uid: c for c in self._project.curve_lines}
+        self._annotation_map = {a.uid: a for a in self._project.annotations}
 
     def _notify_change(self, save_undo: bool = True) -> None:
         if self._batch_mode:

@@ -23,6 +23,7 @@ class PlotCanvas(FigureCanvasQTAgg):
     mouse_moved = Signal(Composition)
     annotation_dropped = Signal(str, float, float)
     vertex_label_dropped = Signal(int, float, float)
+    text_annotation_dropped = Signal(str, float, float)
 
     def __init__(self, parent=None):
         self.fig = Figure()
@@ -60,6 +61,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.interactor.mouse_moved.connect(self.mouse_moved)
         self.interactor.annotation_dropped.connect(self.annotation_dropped)
         self.interactor.vertex_label_dropped.connect(self.vertex_label_dropped)
+        self.interactor.text_annotation_dropped.connect(self.text_annotation_dropped)
 
     # === Перехват внешних перерисовок ===
 

@@ -10,7 +10,8 @@ from PySide6.QtCore import QObject, Signal
 from delta.project_manager import ProjectManager
 from delta.models import (
     ProjectData, NamedComposition, TieLine, CurveLine, GuidePoint, Composition,
-    CompositionUpdate, StyleUpdate, ArrowSettings, IntersectionResult
+    CompositionUpdate, StyleUpdate, ArrowSettings, IntersectionResult,
+    TextAnnotation,
 )
 
 
@@ -150,6 +151,22 @@ class ProjectController(QObject):
 
     def update_display_region_enabled(self, enabled: bool) -> None:
         self._manager.update_display_region_enabled(enabled)
+
+    def create_annotation(self, text: str = "Label",
+                           a: float = 33.0, b: float = 33.0, c: float = 34.0) -> str:
+        return self._manager.create_annotation(text, a, b, c)
+
+    def get_annotation(self, uid: str) -> TextAnnotation:
+        return self._manager.get_annotation(uid)
+
+    def find_annotation(self, uid: str) -> Optional[TextAnnotation]:
+        return self._manager.find_annotation(uid)
+
+    def update_annotation(self, uid: str, **fields) -> None:
+        self._manager.update_annotation(uid, **fields)
+
+    def delete_annotation(self, uid: str) -> None:
+        self._manager.delete_annotation(uid)
 
     def update_components(self, names: List[str]) -> None:
         self._manager.update_components(names)
