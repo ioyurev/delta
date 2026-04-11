@@ -192,7 +192,7 @@ def create_line_width_spin(
 
 
 def create_composition_spin(
-    value: float = 0.0, 
+    value: float = 0.0,
     on_change: Optional[Callable[[float], None]] = None
 ) -> QDoubleSpinBox:
     """SpinBox для компонента композиции (0-1)"""
@@ -204,6 +204,25 @@ def create_composition_spin(
         decimals=3,
         on_change=on_change
     )
+
+
+def create_coord_spin(value: float = 0.0) -> QDoubleSpinBox:
+    """
+    SpinBox для ввода барицентрической координаты.
+
+    Принимает ненормированные значения (0–1000): пользователь может
+    ввести, например, 30/20/50 — нормализация выполняется в логике программы.
+    Используется в таблице guide-точек и аналогичных таблицах координат.
+    """
+    spin = create_double_spin(
+        min_val=0.0,
+        max_val=1000.0,
+        value=value,
+        step=0.01,
+        decimals=4,
+    )
+    spin.setFrame(False)
+    return spin
 
 
 # =============================================================================
@@ -445,6 +464,11 @@ def get_table_cell_style(style_type: str) -> str:
         return f"background-color: {colors['bg_error']}; color: {colors['text_error']}; {base_style}"
     else:
         return f"background-color: {colors['bg_secondary']}; color: {colors['text_primary']}; {base_style}"
+
+
+def get_normal_cell_color() -> QColor:
+    """Возвращает стандартный цвет фона ячейки таблицы (адаптивный)."""
+    return QApplication.palette().base().color()
 
 
 def get_cell_highlight_color(highlight_type: str) -> QColor:

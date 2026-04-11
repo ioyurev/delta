@@ -1,11 +1,11 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
                                QLabel, QLineEdit, QPushButton, QCheckBox, 
                                QDoubleSpinBox, QTableWidgetItem, QHeaderView, 
-                               QMenu, QApplication)
+                               QMenu)
 from PySide6.QtCore import Signal, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QBrush, QKeyEvent
+from PySide6.QtGui import QAction, QBrush, QKeyEvent
 from delta.models import ProjectData, CompositionUpdate, Composition
-from ui.widgets.helpers import get_cell_highlight_color, CopyableTableWidget
+from ui.widgets.helpers import get_cell_highlight_color, get_normal_cell_color, CopyableTableWidget
 from delta.constants import (
     COMP_NAME_MAX_LENGTH, 
     DISPLAY_DECIMALS_TABLE, 
@@ -17,18 +17,6 @@ from delta.constants import (
 import math
 
 _COLUMN_TO_FIELD = {1: 'a', 2: 'b', 3: 'c'}
-
-def _get_error_color() -> QColor:
-    """Возвращает цвет ошибки, адаптированный к теме"""
-    palette = QApplication.palette()
-    base = palette.base().color()
-    if base.lightness() < 128:
-        return QColor(100, 40, 40)
-    return QColor(255, 200, 200)
-
-def _get_normal_color() -> QColor:
-    """Возвращает нормальный цвет фона из текущей палитры"""
-    return QApplication.palette().base().color()
 
 
 class CompositionsTable(QWidget):
@@ -288,14 +276,14 @@ class CompositionsTable(QWidget):
                 
                 # ИСПРАВЛЕНИЕ: Не красим в желтый, если сумма != 1, просто обновляем тултип
                 if col > 0:  # Только для координатных ячеек
-                    item.setBackground(QBrush(_get_normal_color()))
+                    item.setBackground(QBrush(get_normal_cell_color()))
                     if needs_warning:
                         # Показываем нормализацию только в подсказке
                         item.setToolTip(norm_tooltip)
                     else:
                         item.setToolTip(TOOLTIP_COORDINATE)
                 else:
-                    item.setBackground(QBrush(_get_normal_color()))
+                    item.setBackground(QBrush(get_normal_cell_color()))
         
         # После заполнения — проверяем валидность и подсвечиваем
         for i, p in enumerate(project_data.compositions):
@@ -382,13 +370,13 @@ class CompositionsTable(QWidget):
         self._check_row_normalization(item.row())
 
     def _show_validation_error(self, item: QTableWidgetItem, message: str):
-        item.setBackground(QBrush(_get_error_color()))
+        item.setBackground(QBrush(get_cell_highlight_color("error")))
         self.validation_error.emit(message)
         QTimer.singleShot(2000, lambda: self._reset_cell_background(item))
 
     def _reset_cell_background(self, item: QTableWidgetItem):
         try:
-            item.setBackground(QBrush(_get_normal_color()))
+            item.setBackground(QBrush(get_normal_cell_color()))
         except RuntimeError:
             pass
 

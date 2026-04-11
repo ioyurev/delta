@@ -28,7 +28,7 @@ from delta.models import (
 )
 from delta.constants import LINE_WIDTH_DEFAULT, ARROW_COUNT_MIN, ARROW_COUNT_MAX
 from ui.widgets.helpers import (
-    create_line_width_spin, create_marker_size_spin,
+    create_line_width_spin, create_marker_size_spin, create_coord_spin,
     ColorPickerButton, CopyableTableWidget,
 )
 
@@ -322,25 +322,18 @@ class CurveLineDialog(QDialog):
     # =========================================================================
 
     def _append_guide_row(self, comp: Optional[Composition] = None) -> int:
-        """Добавляет строку в таблицу; если comp задан — показывает нормализованные значения."""
+        """Добавляет строку в таблицу; отображает сырые (ненормализованные) значения."""
         row = self.table.rowCount()
         self.table.insertRow(row)
 
-        if comp is not None and comp.is_valid:
-            try:
-                a, b, c = comp.normalized
-            except Exception:
-                a, b, c = comp.a, comp.b, comp.c
-        else:
-            a, b, c = 1 / 3, 1 / 3, 1 / 3
+        # Храним и показываем сырые значения — как в таблице compositions.
+        # Нормализация применяется только внутри логики программы (bary_to_cart).
+        a = comp.a if comp is not None else 0.33
+        b = comp.b if comp is not None else 0.33
+        c = comp.c if comp is not None else 0.34
 
         for col, val in enumerate([a, b, c]):
-            spin = QDoubleSpinBox()
-            spin.setRange(0.0, 1000.0)
-            spin.setDecimals(4)
-            spin.setSingleStep(0.01)
-            spin.setValue(val)
-            spin.setFrame(False)
+            spin = create_coord_spin(value=val)
             self.table.setCellWidget(row, col, spin)
 
         btn_del = QPushButton("×")
@@ -399,7 +392,11 @@ class CurveLineDialog(QDialog):
         self.sb_gm_size.setEnabled(enabled)
 
     def _collect_guide_points(self) -> List[GuidePoint]:
-        """Собирает guide-точки из таблицы, нормализуя значения."""
+        """Собирает guide-точки из таблицы, сохраняя сырые значения.
+
+        Нормализация (sum=1) применяется только внутри логики программы,
+        аналогично тому, как compositions хранят сырые значения в NamedComposition.
+        """
         guides = []
         for row in range(self.table.rowCount()):
             raw = [self.table.cellWidget(row, col) for col in range(3)]
@@ -407,12 +404,10 @@ class CurveLineDialog(QDialog):
                 continue
             spins = [cast(QDoubleSpinBox, w) for w in raw]
             a, b, c = spins[0].value(), spins[1].value(), spins[2].value()
-            raw_comp = Composition(a=a, b=b, c=c)
-            if not raw_comp.is_valid:
+            comp = Composition(a=a, b=b, c=c)
+            if not comp.is_valid:
                 continue
-            # Нормализуем перед сохранением
-            na, nb, nc = raw_comp.normalized
-            guides.append(GuidePoint(composition=Composition(a=na, b=nb, c=nc)))
+            guides.append(GuidePoint(composition=comp))
         return guides
 
     def _on_accept(self) -> None:
