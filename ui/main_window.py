@@ -57,6 +57,8 @@ class MainWindow(QMainWindow):
 
         # Активный диалог кривой (немодальный — может быть открыт параллельно)
         self._active_curve_dlg: CurveLineDialog | None = None
+        # Кто ожидает результат выбора точки на холсте: "" | "curve" | "annotation:{field}"
+        self._pending_pick_requester: str = ""
 
         # Инициализация UI
         self._init_menu()
@@ -265,6 +267,7 @@ class MainWindow(QMainWindow):
         self.annotation_widget.request_add.connect(self._on_annotation_add)
         self.annotation_widget.request_remove.connect(self._on_annotation_remove)
         self.annotation_widget.annotation_changed.connect(self._on_annotation_changed)
+        self.annotation_widget.canvas_pick_requested.connect(self._on_annotation_pick_requested)
         self.canvas.text_annotation_dropped.connect(self._on_text_annotation_dropped)
 
     def _on_validation_error(self, message: str):
@@ -511,21 +514,30 @@ class MainWindow(QMainWindow):
     def _on_curve_dlg_pick_req(self) -> None:
         """Переключает интерактор в режим выбора guide-точки."""
         from ui.canvas.interactor import CanvasInteractor
+        self._pending_pick_requester = "curve"
         self.canvas.interactor.set_mode(CanvasInteractor.MODE_GUIDE_PICK)
         self.statusBar().showMessage(
             "Click on the diagram to add a guide point. Esc to cancel.", 0
         )
 
     def _on_guide_point_picked(self, comp: Composition) -> None:
-        """Получает guide-точку от холста и передаёт в открытый диалог."""
+        """Получает guide-точку от холста и маршрутизирует по _pending_pick_requester."""
         from ui.canvas.interactor import CanvasInteractor
         self.canvas.interactor.set_mode(CanvasInteractor.MODE_NORMAL)
         self.statusBar().clearMessage()
 
-        if self._active_curve_dlg and self._active_curve_dlg.isVisible():
-            self._active_curve_dlg.add_guide_point_from_canvas(comp)
-            self._active_curve_dlg.raise_()
-            self._active_curve_dlg.activateWindow()
+        requester = self._pending_pick_requester
+        self._pending_pick_requester = ""
+
+        if requester.startswith("annotation:"):
+            field = requester[len("annotation:"):]
+            self.annotation_widget.receive_pick(field, comp)
+        else:
+            # curve dialog
+            if self._active_curve_dlg and self._active_curve_dlg.isVisible():
+                self._active_curve_dlg.add_guide_point_from_canvas(comp)
+                self._active_curve_dlg.raise_()
+                self._active_curve_dlg.activateWindow()
 
     def _on_curve_dlg_accepted(self) -> None:
         dlg = self._active_curve_dlg
@@ -579,6 +591,8 @@ class MainWindow(QMainWindow):
         self.canvas.interactor.set_mode(CanvasInteractor.MODE_NORMAL)
         self.canvas.set_highlight_line(None)
         self._active_curve_dlg = None
+        if self._pending_pick_requester == "curve":
+            self._pending_pick_requester = ""
         self.statusBar().clearMessage()
 
     @handle_entity_errors
@@ -640,6 +654,16 @@ class MainWindow(QMainWindow):
 
     def _on_region_enabled_changed(self, enabled: bool) -> None:
         self.controller.update_display_region_enabled(enabled)
+
+    def _on_annotation_pick_requested(self, field: str) -> None:
+        """Annotation widget запрашивает выбор точки на холсте."""
+        from ui.canvas.interactor import CanvasInteractor
+        self._pending_pick_requester = f"annotation:{field}"
+        self.canvas.interactor.set_mode(CanvasInteractor.MODE_GUIDE_PICK)
+        label = "position" if field == "position" else "arrow target"
+        self.statusBar().showMessage(
+            f"Click on the diagram to pick {label}. Esc to cancel.", 0
+        )
 
     def _on_annotation_add(self) -> None:
         uid = self.controller.create_annotation()

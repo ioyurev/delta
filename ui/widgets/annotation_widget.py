@@ -11,7 +11,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt
 
 from delta.models import ProjectData, TextAnnotation, Composition
-from ui.widgets.helpers import ColorPickerButton, create_coord_spin, create_double_spin
+from ui.widgets.helpers import (
+    ColorPickerButton, create_double_spin, PickableCoordWidget,
+)
 
 
 class AnnotationWidget(QWidget):
@@ -19,14 +21,17 @@ class AnnotationWidget(QWidget):
     Вкладка управления текстовыми аннотациями.
 
     Signals:
-        request_add()               — добавить новую аннотацию
-        request_remove(uid)         — удалить аннотацию
+        request_add()                 — добавить новую аннотацию
+        request_remove(uid)           — удалить аннотацию
         annotation_changed(uid, dict) — изменить поле(я) аннотации
+        canvas_pick_requested(field)  — запрос выбора точки на холсте
+                                        field: 'position' | 'arrow_target'
     """
 
     request_add = Signal()
     request_remove = Signal(str)
     annotation_changed = Signal(str, object)   # (uid, dict of fields)
+    canvas_pick_requested = Signal(str)         # field name
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -49,9 +54,11 @@ class AnnotationWidget(QWidget):
         root.addLayout(btn_row)
 
         # ── Список аннотаций ─────────────────────────────────────
+        # Галочка в списке управляет видимостью (visible)
         self._list = QListWidget()
         self._list.setMaximumHeight(120)
         self._list.currentRowChanged.connect(self._on_row_changed)
+        self._list.itemChanged.connect(self._on_item_changed)
         root.addWidget(self._list)
 
         # ── Панель редактирования ────────────────────────────────
@@ -81,15 +88,14 @@ class AnnotationWidget(QWidget):
 
         # ── Position ─────────────────────────────────────────────
         form.addWidget(QLabel("<b>Position (barycentric)</b>"))
-        pos_row = QHBoxLayout()
-        self._pos_a = create_coord_spin()
-        self._pos_b = create_coord_spin()
-        self._pos_c = create_coord_spin()
-        for label, spin in [("A", self._pos_a), ("B", self._pos_b), ("C", self._pos_c)]:
-            pos_row.addWidget(QLabel(label))
-            pos_row.addWidget(spin)
-            spin.valueChanged.connect(self._on_position_changed)
-        form.addLayout(pos_row)
+        self._pos_coord = PickableCoordWidget()
+        self._pos_coord.value_changed.connect(
+            lambda c: self._emit_field('position', c)
+        )
+        self._pos_coord.pick_requested.connect(
+            lambda: self._on_pick_requested('position')
+        )
+        form.addWidget(self._pos_coord)
 
         # ── Font ─────────────────────────────────────────────────
         font_box = QGroupBox("Font")
@@ -164,15 +170,14 @@ class AnnotationWidget(QWidget):
         self._chk_arrow.toggled.connect(lambda v: self._emit_field('arrow_enabled', v))
         arrow_form.addRow("", self._chk_arrow)
 
-        target_row = QHBoxLayout()
-        self._arr_a = create_coord_spin()
-        self._arr_b = create_coord_spin()
-        self._arr_c = create_coord_spin()
-        for label, spin in [("A", self._arr_a), ("B", self._arr_b), ("C", self._arr_c)]:
-            target_row.addWidget(QLabel(label))
-            target_row.addWidget(spin)
-            spin.valueChanged.connect(self._on_arrow_target_changed)
-        arrow_form.addRow("Target:", target_row)
+        self._arr_coord = PickableCoordWidget()
+        self._arr_coord.value_changed.connect(
+            lambda c: self._emit_field('arrow_target', c)
+        )
+        self._arr_coord.pick_requested.connect(
+            lambda: self._on_pick_requested('arrow_target')
+        )
+        arrow_form.addRow("Target:", self._arr_coord)
 
         self._arrow_color = ColorPickerButton("#000000")
         self._arrow_color.color_changed.connect(lambda c: self._emit_field('arrow_color', c))
@@ -207,14 +212,15 @@ class AnnotationWidget(QWidget):
         self._block_emit = False
 
         # Восстанавливаем выбор
+        restored = False
         if prev_uid:
             for i in range(self._list.count()):
                 if self._list.item(i).data(Qt.ItemDataRole.UserRole) == prev_uid:
                     self._list.setCurrentRow(i)
+                    restored = True
                     break
-            else:
-                self._current_uid = None
-                self._detail_widget.setEnabled(False)
+        if not restored:
+            self._current_uid = None
 
         # Обновляем детальную панель
         selected: Optional[TextAnnotation] = self._find_ann(project_data, self._current_uid)
@@ -223,14 +229,23 @@ class AnnotationWidget(QWidget):
         else:
             self._detail_widget.setEnabled(False)
 
-        # Синхронизируем заголовки компонентов (без перерисовки)
-        # (используются в подсказках к полям позиции — пока просто метки)
+    def receive_pick(self, field: str, comp: Composition) -> None:
+        """Получает результат выбора точки на холсте."""
+        self._block_emit = True
+        if field == 'position':
+            self._pos_coord.set_value(comp)
+        elif field == 'arrow_target':
+            self._arr_coord.set_value(comp)
+        self._block_emit = False
+        self._emit_field(field, comp)
 
     # =========================================================================
     # PRIVATE
     # =========================================================================
 
-    def _find_ann(self, project_data: ProjectData, uid: Optional[str]) -> Optional[TextAnnotation]:
+    def _find_ann(
+        self, project_data: ProjectData, uid: Optional[str]
+    ) -> Optional[TextAnnotation]:
         if uid is None:
             return None
         return next((a for a in project_data.annotations if a.uid == uid), None)
@@ -240,11 +255,7 @@ class AnnotationWidget(QWidget):
         self._detail_widget.setEnabled(True)
 
         self._txt_edit.setText(ann.text)
-
-        for spin, val in [(self._pos_a, ann.position.a),
-                          (self._pos_b, ann.position.b),
-                          (self._pos_c, ann.position.c)]:
-            spin.setValue(val)
+        self._pos_coord.set_value(ann.position)
 
         self._font_size.setValue(ann.font_size)
         self._color.set_color(ann.color)
@@ -260,14 +271,8 @@ class AnnotationWidget(QWidget):
         self._box_pad.setValue(ann.box_pad)
 
         self._chk_arrow.setChecked(ann.arrow_enabled)
-        if ann.arrow_target is not None:
-            self._arr_a.setValue(ann.arrow_target.a)
-            self._arr_b.setValue(ann.arrow_target.b)
-            self._arr_c.setValue(ann.arrow_target.c)
-        else:
-            self._arr_a.setValue(33.0)
-            self._arr_b.setValue(33.0)
-            self._arr_c.setValue(34.0)
+        target = ann.arrow_target if ann.arrow_target is not None else Composition(a=33.0, b=33.0, c=34.0)
+        self._arr_coord.set_value(target)
         self._arrow_color.set_color(ann.arrow_color)
 
         self._block_emit = False
@@ -289,32 +294,24 @@ class AnnotationWidget(QWidget):
                 return
         self._detail_widget.setEnabled(uid is not None)
 
+    def _on_item_changed(self, item: QListWidgetItem) -> None:
+        """Галочка в списке → переключить видимость аннотации."""
+        if self._block_emit:
+            return
+        uid = item.data(Qt.ItemDataRole.UserRole)
+        if uid:
+            visible = item.checkState() == Qt.CheckState.Checked
+            self.annotation_changed.emit(uid, {'visible': visible})
+
     def _on_remove_clicked(self) -> None:
         uid = self._current_uid
         if uid:
             self.request_remove.emit(uid)
 
-    def _emit_field(self, field: str, value) -> None:
+    def _on_pick_requested(self, field: str) -> None:
+        self.canvas_pick_requested.emit(field)
+
+    def _emit_field(self, field: str, value: object) -> None:
         if self._block_emit or self._current_uid is None:
             return
         self.annotation_changed.emit(self._current_uid, {field: value})
-
-    def _on_position_changed(self) -> None:
-        if self._block_emit or self._current_uid is None:
-            return
-        pos = Composition(
-            a=self._pos_a.value(),
-            b=self._pos_b.value(),
-            c=self._pos_c.value(),
-        )
-        self.annotation_changed.emit(self._current_uid, {'position': pos})
-
-    def _on_arrow_target_changed(self) -> None:
-        if self._block_emit or self._current_uid is None:
-            return
-        target = Composition(
-            a=self._arr_a.value(),
-            b=self._arr_b.value(),
-            c=self._arr_c.value(),
-        )
-        self.annotation_changed.emit(self._current_uid, {'arrow_target': target})

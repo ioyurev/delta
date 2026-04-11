@@ -1,6 +1,9 @@
 """Вспомогательные функции и виджеты для UI"""
 
-from PySide6.QtWidgets import QDoubleSpinBox, QMenu, QComboBox, QPushButton, QColorDialog, QApplication, QTableWidget
+from PySide6.QtWidgets import (
+    QDoubleSpinBox, QMenu, QComboBox, QPushButton, QColorDialog,
+    QApplication, QTableWidget, QHBoxLayout, QLabel, QWidget,
+)
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QColor, QCursor, QPalette, QKeyEvent
 from typing import Callable, Optional, TypeVar, ParamSpec, Sequence
@@ -134,6 +137,75 @@ class ColorPickerButton(QPushButton):
                 self._color = new_color
                 self._update_appearance()
                 self.color_changed.emit(self._color)
+
+
+# =============================================================================
+# PICKABLE COORD WIDGET
+# =============================================================================
+
+class PickableCoordWidget(QWidget):
+    """
+    Ввод одной барицентрической точки: три спинбокса A/B/C + кнопка выбора на холсте.
+
+    Signals:
+        value_changed(Composition): испускается при изменении любого спинбокса
+        pick_requested():           испускается при нажатии кнопки «📍 Pick»
+    """
+
+    value_changed = Signal(object)   # Composition
+    pick_requested = Signal()
+
+    def __init__(
+        self,
+        label_a: str = "A",
+        label_b: str = "B",
+        label_c: str = "C",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        self._spin_a = create_coord_spin()
+        self._spin_b = create_coord_spin()
+        self._spin_c = create_coord_spin()
+
+        for lbl, spin in [
+            (label_a, self._spin_a),
+            (label_b, self._spin_b),
+            (label_c, self._spin_c),
+        ]:
+            layout.addWidget(QLabel(lbl))
+            layout.addWidget(spin)
+            spin.valueChanged.connect(self._on_spin_changed)
+
+        self._btn_pick = QPushButton("📍")
+        self._btn_pick.setToolTip("Pick position from canvas by clicking on diagram")
+        self._btn_pick.setFixedWidth(30)
+        self._btn_pick.clicked.connect(self.pick_requested)
+        layout.addWidget(self._btn_pick)
+
+        self._block = False
+
+    def value(self) -> 'object':
+        from delta.models import Composition
+        return Composition(
+            a=self._spin_a.value(),
+            b=self._spin_b.value(),
+            c=self._spin_c.value(),
+        )
+
+    def set_value(self, comp: 'object') -> None:
+        self._block = True
+        self._spin_a.setValue(getattr(comp, 'a', 0.0))
+        self._spin_b.setValue(getattr(comp, 'b', 0.0))
+        self._spin_c.setValue(getattr(comp, 'c', 0.0))
+        self._block = False
+
+    def _on_spin_changed(self) -> None:
+        if not self._block:
+            self.value_changed.emit(self.value())
 
 
 # =============================================================================
