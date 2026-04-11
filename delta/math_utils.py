@@ -14,7 +14,7 @@ from delta.constants import (
     TOLERANCE_ON_LINE_STRICT,
 )
 from delta.constants import TRIANGLE_HEIGHT as H
-from loguru import logger  # <--- Импорт
+from loguru import logger
 
 def _check_finite(value: float, name: str) -> None:
     """
@@ -537,6 +537,61 @@ def are_compositions_collinear(
     area = np.linalg.norm(cross)
     
     return bool(area < tol)
+
+
+def fit_curve_through_points(
+    points_cart: List[np.ndarray],
+    n_samples: int = 300,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Строит параметрический кубический сплайн через все заданные точки.
+
+    Endpoint-точки (первая и последняя) проходятся ТОЧНО.
+    Guide-точки (промежуточные) тоже интерполируются — пользователь ставит
+    их туда, куда хочет провести кривую.
+
+    Args:
+        points_cart: Список 2D точек [np.array([x, y]), ...], минимум 2 шт.
+        n_samples:   Количество точек в выходном массиве (для ax.plot).
+
+    Returns:
+        (xs, ys) — массивы NumPy длиной n_samples.
+
+    Raises:
+        ValueError: Если points_cart содержит менее 2 точек.
+    """
+    if len(points_cart) < 2:
+        raise ValueError("fit_curve_through_points: need at least 2 points")
+
+    pts = np.array(points_cart, dtype=float)  # shape (n, 2)
+
+    if len(pts) == 2:
+        # Прямая — не нужен scipy
+        xs = np.linspace(pts[0, 0], pts[1, 0], n_samples)
+        ys = np.linspace(pts[0, 1], pts[1, 1], n_samples)
+        return xs, ys
+
+    # Arc-length parameterization: t[i] = cumulative chord distance
+    diffs = np.diff(pts, axis=0)
+    seg_lens = np.sqrt((diffs ** 2).sum(axis=1))
+    t = np.zeros(len(pts))
+    t[1:] = np.cumsum(seg_lens)
+
+    total = t[-1]
+    if total < EPSILON_ZERO:
+        # Все точки практически совпадают
+        xs = np.full(n_samples, pts[0, 0])
+        ys = np.full(n_samples, pts[0, 1])
+        return xs, ys
+
+    t /= total  # нормализация к [0, 1]
+
+    from scipy.interpolate import CubicSpline  # type: ignore[import-untyped]
+    cs_x = CubicSpline(t, pts[:, 0])
+    cs_y = CubicSpline(t, pts[:, 1])
+
+    t_eval = np.linspace(0.0, 1.0, n_samples)
+    return cs_x(t_eval), cs_y(t_eval)
 
 
 def get_triangle_area(p1: Composition, p2: Composition, p3: Composition) -> float:

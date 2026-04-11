@@ -11,8 +11,8 @@ from typing import Optional, List, Dict, Callable
 from pydantic import ValidationError as PydanticValidationError
 
 from delta.models import (
-    ProjectData, NamedComposition, TieLine, Composition,
-    CompositionUpdate, StyleUpdate, IntersectionResult, IntersectionStatus
+    ProjectData, NamedComposition, TieLine, CurveLine, GuidePoint, Composition,
+    CompositionUpdate, StyleUpdate, ArrowSettings, IntersectionResult, IntersectionStatus
 )
 from delta import math_utils
 from delta.constants import EPSILON_BOUNDARY
@@ -67,6 +67,7 @@ class ProjectManager:
         # Кэши для O(1) доступа
         self._comp_map: Dict[str, NamedComposition] = {}
         self._line_map: Dict[str, TieLine] = {}
+        self._curve_map: Dict[str, CurveLine] = {}
         
         # Режим пакетной обработки (подавляет уведомления)
         self._batch_mode = False
@@ -105,6 +106,12 @@ class ProjectManager:
 
     def get_line_count(self) -> int:
         return len(self._project.lines)
+
+    def get_all_curve_lines(self) -> List[CurveLine]:
+        return self._project.curve_lines
+
+    def get_curve_line_count(self) -> int:
+        return len(self._project.curve_lines)
 
     def get_components(self) -> List[str]:
         return list(self._project.components)
@@ -153,6 +160,15 @@ class ProjectManager:
     def find_line(self, uid: str) -> Optional[TieLine]:
         """Мягкий поиск — возвращает None если не найдена"""
         return self._line_map.get(uid)
+
+    def get_curve_line(self, uid: str) -> CurveLine:
+        cline = self._curve_map.get(uid)
+        if cline is None:
+            raise EntityNotFoundError("CurveLine", uid)
+        return cline
+
+    def find_curve_line(self, uid: str) -> Optional[CurveLine]:
+        return self._curve_map.get(uid)
 
     def get_line_endpoints(self, line_uid: str) -> tuple[NamedComposition, NamedComposition]:
         """
@@ -338,6 +354,12 @@ class ProjectManager:
         update.apply_to(line.style)
         self._notify_change(save_undo=False)
 
+    def update_line_arrow(self, uid: str, arrow: ArrowSettings) -> None:
+        line = self.get_line(uid)
+        self._save_undo_before_change()
+        line.arrow = arrow
+        self._notify_change(save_undo=False)
+
     def update_line_endpoints(self, line_uid: str, start_uid: str, end_uid: str) -> None:
         """
         Обновляет конечные точки линии.
@@ -414,14 +436,28 @@ class ProjectManager:
                 line.uid for line in self._project.lines
                 if line.start_uid == uid or line.end_uid == uid
             ]
-            
+
             for line_uid in lines_to_remove:
                 if line_uid in self._line_map:
                     del self._line_map[line_uid]
-            
+
             self._project.lines = [
                 line for line in self._project.lines
                 if line.uid not in lines_to_remove
+            ]
+
+            curves_to_remove = [
+                c.uid for c in self._project.curve_lines
+                if c.start_uid == uid or c.end_uid == uid
+            ]
+
+            for c_uid in curves_to_remove:
+                if c_uid in self._curve_map:
+                    del self._curve_map[c_uid]
+
+            self._project.curve_lines = [
+                c for c in self._project.curve_lines
+                if c.uid not in curves_to_remove
             ]
         finally:
             self._batch_mode = old_batch
@@ -433,6 +469,78 @@ class ProjectManager:
         self._save_undo_before_change()                         # ◄ FIX
         del self._line_map[uid]
         self._project.lines = [line for line in self._project.lines if line.uid != uid]
+        self._notify_change(save_undo=False)
+
+    # =========================================================================
+    # CURVE LINE CRUD
+    # =========================================================================
+
+    def create_curve_line(self, start_uid: str, end_uid: str) -> str:
+        """
+        Создаёт кривую линию между двумя составами.
+
+        Returns:
+            UID созданной CurveLine
+
+        Raises:
+            ValidationError: если start == end
+            EntityNotFoundError: если составы не найдены
+        """
+        if start_uid == end_uid:
+            raise ValidationError("Cannot create curve line: start and end must be different")
+
+        self.get_composition(start_uid)
+        self.get_composition(end_uid)
+
+        self._save_undo_before_change()
+
+        cline = CurveLine(start_uid=start_uid, end_uid=end_uid)
+        self._project.curve_lines.append(cline)
+        self._curve_map[cline.uid] = cline
+
+        logger.bind(uid=cline.uid).info(f"Created curve line {start_uid} -> {end_uid}")
+        self._notify_change(save_undo=False)
+        return cline.uid
+
+    def update_curve_line_endpoints(
+        self, uid: str, start_uid: str, end_uid: str
+    ) -> None:
+        if start_uid == end_uid:
+            raise ValidationError("Start and end must be different")
+        self.get_composition(start_uid)
+        self.get_composition(end_uid)
+
+        self._save_undo_before_change()
+        cline = self.get_curve_line(uid)
+        cline.start_uid = start_uid
+        cline.end_uid = end_uid
+        self._notify_change(save_undo=False)
+
+    def update_curve_line_style(self, uid: str, update: StyleUpdate) -> None:
+        cline = self.get_curve_line(uid)
+        self._save_undo_before_change()
+        update.apply_to(cline.style)
+        self._notify_change(save_undo=False)
+
+    def update_curve_line_arrow(self, uid: str, arrow: ArrowSettings) -> None:
+        cline = self.get_curve_line(uid)
+        self._save_undo_before_change()
+        cline.arrow = arrow
+        self._notify_change(save_undo=False)
+
+    def update_curve_line_guides(self, uid: str, guides: List[GuidePoint]) -> None:
+        cline = self.get_curve_line(uid)
+        self._save_undo_before_change()
+        cline.guide_points = list(guides)
+        self._notify_change(save_undo=False)
+
+    def delete_curve_line(self, uid: str) -> None:
+        self.get_curve_line(uid)
+        self._save_undo_before_change()
+        del self._curve_map[uid]
+        self._project.curve_lines = [
+            c for c in self._project.curve_lines if c.uid != uid
+        ]
         self._notify_change(save_undo=False)
 
     # =========================================================================
@@ -554,6 +662,7 @@ class ProjectManager:
     def _rebuild_cache(self) -> None:
         self._comp_map = {comp.uid: comp for comp in self._project.compositions}
         self._line_map = {line.uid: line for line in self._project.lines}
+        self._curve_map = {c.uid: c for c in self._project.curve_lines}
 
     def _notify_change(self, save_undo: bool = True) -> None:
         if self._batch_mode:

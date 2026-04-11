@@ -1,10 +1,12 @@
+import numpy as np
 import matplotlib.patheffects as path_effects
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
+from typing import Literal
 from delta import math_utils
-from delta.models import ProjectData, RenderOverlay, Composition
+from delta.models import ProjectData, RenderOverlay, Composition, ArrowSettings
 from delta.constants import (
-    COLOR_BACKGROUND, COLOR_TERNARY_TRIANGLE, COLOR_PROJECTION, 
+    COLOR_BACKGROUND, COLOR_TERNARY_TRIANGLE, COLOR_PROJECTION,
     COLOR_INTERSECTION, ZORDER_GRID, ZORDER_LINES, ZORDER_COMPS,
     ZORDER_OVERLAY, ZORDER_PROJECTION, ZORDER_INTERSECTION,
     VERTEX_LABEL_OFFSET, COMP_LABEL_OFFSET, TRIANGLE_HEIGHT
@@ -28,9 +30,9 @@ class ProjectRenderer:
         self.ax = ax
         self._line_artists: dict[str, Line2D] = {}
         self._cached_overlay_uids: set[str] = set()
-        self._aspect_mode: str = 'equal'                    # ◄ НОВОЕ
+        self._aspect_mode: Literal['equal', 'auto'] = 'equal'
 
-    def set_aspect_mode(self, mode: str) -> None:           # ◄ НОВОЕ
+    def set_aspect_mode(self, mode: Literal['equal', 'auto']) -> None:
         """Устанавливает режим пропорций: 'equal' или 'auto'"""
         self._aspect_mode = mode
 
@@ -55,7 +57,7 @@ class ProjectRenderer:
         if project.grid.visible:
             self._draw_grid(project.grid.step, is_inv)
 
-        # 3. Линии
+        # 3. Прямые линии (TieLine)
         comp_map = {p.uid: p for p in project.compositions}
         for line in project.lines:
             start = comp_map.get(line.start_uid)
@@ -63,9 +65,11 @@ class ProjectRenderer:
             if start and end:
                 p1 = math_utils.bary_to_cart(start.composition, is_inv)
                 p2 = math_utils.bary_to_cart(end.composition, is_inv)
-                
+                xs = np.linspace(p1[0], p2[0], 300)
+                ys = np.linspace(p1[1], p2[1], 300)
+
                 mpl_line, = self.ax.plot(
-                    [p1[0], p2[0]], [p1[1], p2[1]],
+                    xs, ys,
                     color=line.style.color,
                     linestyle=line.style.line_style,
                     lw=line.style.size,
@@ -74,6 +78,51 @@ class ProjectRenderer:
                     zorder=ZORDER_LINES
                 )
                 self._line_artists[line.uid] = mpl_line
+
+                if line.arrow.enabled:
+                    self._draw_arrows_on_path(
+                        xs, ys, line.arrow,
+                        line.style.color, line.style.size
+                    )
+
+        # 3b. Кривые линии (CurveLine)
+        for cline in project.curve_lines:
+            start = comp_map.get(cline.start_uid)
+            end = comp_map.get(cline.end_uid)
+            if not start or not end:
+                continue
+
+            p_start = math_utils.bary_to_cart(start.composition, is_inv)
+            p_end = math_utils.bary_to_cart(end.composition, is_inv)
+            guide_pts = [
+                math_utils.bary_to_cart(gp.composition, is_inv)
+                for gp in cline.guide_points
+            ]
+            all_pts = [p_start, *guide_pts, p_end]
+
+            try:
+                xs, ys = math_utils.fit_curve_through_points(all_pts)
+            except Exception:
+                # Fallback: прямая линия
+                xs = np.linspace(p_start[0], p_end[0], 300)
+                ys = np.linspace(p_start[1], p_end[1], 300)
+
+            mpl_line, = self.ax.plot(
+                xs, ys,
+                color=cline.style.color,
+                linestyle=cline.style.line_style,
+                lw=cline.style.size,
+                picker=True,
+                pickradius=5,
+                zorder=ZORDER_LINES
+            )
+            self._line_artists[cline.uid] = mpl_line
+
+            if cline.arrow.enabled:
+                self._draw_arrows_on_path(
+                    xs, ys, cline.arrow,
+                    cline.style.color, cline.style.size
+                )
 
         # 4. Составы (Точки и метки)
         for comp in project.compositions:
@@ -197,6 +246,55 @@ class ProjectRenderer:
             else:
                 artist.set_path_effects([path_effects.Normal()])
                 artist.set_zorder(ZORDER_LINES)
+
+    def _draw_arrows_on_path(
+        self,
+        xs: np.ndarray,
+        ys: np.ndarray,
+        arrow: ArrowSettings,
+        color: str,
+        lw: float,
+    ) -> None:
+        """
+        Рисует стрелки вдоль пути, заданного массивами xs/ys.
+
+        Направление каждой стрелки определяется двумя реальными точками пути
+        (не касательной), поэтому стрелка точно совпадает с нарисованной линией.
+        """
+        n = len(xs)
+        if n < 4:
+            return
+
+        # Шаг для определения направления (≈2% длины пути)
+        delta = max(2, n // 50)
+
+        # Равномерное распределение стрелок по длине дуги
+        step = 1.0 / (arrow.count + 1)
+        positions = [step * (i + 1) for i in range(arrow.count)]
+
+        for pos in positions:
+            i = int(pos * (n - 1))
+            i = max(delta, min(n - 1 - delta, i))
+
+            if arrow.direction == "to_end":
+                x0, y0 = xs[i - delta], ys[i - delta]
+                x1, y1 = xs[i + delta], ys[i + delta]
+            else:
+                x0, y0 = xs[i + delta], ys[i + delta]
+                x1, y1 = xs[i - delta], ys[i - delta]
+
+            self.ax.annotate(
+                "",
+                xy=(x1, y1),
+                xytext=(x0, y0),
+                arrowprops=dict(
+                    arrowstyle="-|>",
+                    color=color,
+                    lw=lw,
+                    mutation_scale=10 + lw * 2,
+                ),
+                zorder=ZORDER_LINES + 1,
+            )
 
     def _draw_grid(self, step: float, is_inv: bool):
         if step < 0.01: 

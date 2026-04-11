@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m pytest tests/test_math_utils.py -x -q)"
+      "Bash(python)",
+      "Bash(uv)",
+      "Bash(uv run:*)",
+      "Bash(PYTHONUTF8=1 uv run mypy . --pretty)"
     ]
   }
 }

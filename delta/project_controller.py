@@ -9,8 +9,8 @@ from PySide6.QtCore import QObject, Signal
 
 from delta.project_manager import ProjectManager
 from delta.models import (
-    ProjectData, NamedComposition, TieLine,
-    CompositionUpdate, StyleUpdate, IntersectionResult
+    ProjectData, NamedComposition, TieLine, CurveLine, GuidePoint,
+    CompositionUpdate, StyleUpdate, ArrowSettings, IntersectionResult
 )
 
 
@@ -69,6 +69,12 @@ class ProjectController(QObject):
     def get_all_lines(self) -> List[TieLine]:
         return self._manager.get_all_lines()
 
+    def get_all_curve_lines(self) -> List[CurveLine]:
+        return self._manager.get_all_curve_lines()
+
+    def get_curve_line_count(self) -> int:
+        return self._manager.get_curve_line_count()
+
     # =========================================================================
     # ДЕЛЕГИРОВАНИЕ ПОИСКА
     # =========================================================================
@@ -84,6 +90,12 @@ class ProjectController(QObject):
 
     def find_line(self, uid: str):
         return self._manager.find_line(uid)
+
+    def get_curve_line(self, uid: str) -> CurveLine:
+        return self._manager.get_curve_line(uid)
+
+    def find_curve_line(self, uid: str):
+        return self._manager.find_curve_line(uid)
 
     def get_line_endpoints(self, line_uid: str):
         return self._manager.get_line_endpoints(line_uid)
@@ -103,6 +115,26 @@ class ProjectController(QObject):
     def create_line(self, start_uid: str, end_uid: str) -> str:
         return self._manager.create_line(start_uid, end_uid)
 
+    def create_curve_line(self, start_uid: str, end_uid: str) -> str:
+        return self._manager.create_curve_line(start_uid, end_uid)
+
+    def update_curve_line_endpoints(
+        self, uid: str, start_uid: str, end_uid: str
+    ) -> None:
+        self._manager.update_curve_line_endpoints(uid, start_uid, end_uid)
+
+    def update_curve_line_style(self, uid: str, update: StyleUpdate) -> None:
+        self._manager.update_curve_line_style(uid, update)
+
+    def update_curve_line_arrow(self, uid: str, arrow: ArrowSettings) -> None:
+        self._manager.update_curve_line_arrow(uid, arrow)
+
+    def update_curve_line_guides(self, uid: str, guides: List[GuidePoint]) -> None:
+        self._manager.update_curve_line_guides(uid, guides)
+
+    def delete_curve_line(self, uid: str) -> None:
+        self._manager.delete_curve_line(uid)
+
     def update_components(self, names: List[str]) -> None:
         self._manager.update_components(names)
 
@@ -121,6 +153,9 @@ class ProjectController(QObject):
 
     def update_line_style(self, uid: str, update: StyleUpdate) -> None:
         self._manager.update_line_style(uid, update)
+
+    def update_line_arrow(self, uid: str, arrow: ArrowSettings) -> None:
+        self._manager.update_line_arrow(uid, arrow)
 
     def update_line_endpoints(self, line_uid: str, start_uid: str, 
                               end_uid: str) -> None:

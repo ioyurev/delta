@@ -26,6 +26,9 @@ from delta.constants import (
     GRID_STEP_DEFAULT,
     GRID_STEP_MIN,
     GRID_STEP_MAX,
+    ARROW_COUNT_DEFAULT,
+    ARROW_COUNT_MIN,
+    ARROW_COUNT_MAX,
 )
 
 
@@ -205,23 +208,74 @@ class NamedComposition(BaseModel):
 
 
 # =============================================================================
+# ARROW SETTINGS
+# =============================================================================
+
+class ArrowSettings(BaseModel):
+    """Настройки стрелок вдоль линии"""
+    model_config = ConfigDict(validate_assignment=True)
+
+    enabled: bool = False
+    direction: str = "to_end"  # "to_end" | "to_start"
+    count: int = Field(default=ARROW_COUNT_DEFAULT, ge=ARROW_COUNT_MIN, le=ARROW_COUNT_MAX)
+
+    @field_validator('direction')
+    @classmethod
+    def validate_direction(cls, v: str) -> str:
+        if v not in ("to_end", "to_start"):
+            return "to_end"
+        return v
+
+
+# =============================================================================
 # TIE LINE
 # =============================================================================
 
 class TieLine(BaseModel):
-    """Линия связи между составами"""
+    """Прямая линия связи между составами"""
     model_config = ConfigDict(validate_assignment=True)
-    
+
     uid: str = Field(default_factory=lambda: str(uuid.uuid4()))
     start_uid: str = ""
     end_uid: str = ""
     style: VisualStyle = Field(default_factory=lambda: VisualStyle(size=LINE_WIDTH_DEFAULT))
-    
+    arrow: ArrowSettings = Field(default_factory=ArrowSettings)
+
     @model_validator(mode='after')
     def validate_different_endpoints(self) -> 'TieLine':
         """Start и End должны быть разными"""
         if self.start_uid and self.end_uid and self.start_uid == self.end_uid:
             raise ValueError("Line cannot connect composition to itself")
+        return self
+
+
+# =============================================================================
+# CURVE LINE
+# =============================================================================
+
+class GuidePoint(BaseModel):
+    """Анонимная направляющая точка кривой (не из project.compositions)"""
+    model_config = ConfigDict(validate_assignment=True)
+
+    uid: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    composition: Composition = Field(default_factory=Composition)
+
+
+class CurveLine(BaseModel):
+    """Кривая линия: проходит через start/end, аппроксимирует guide_points"""
+    model_config = ConfigDict(validate_assignment=True)
+
+    uid: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    start_uid: str = ""
+    end_uid: str = ""
+    guide_points: List[GuidePoint] = Field(default_factory=list)
+    style: VisualStyle = Field(default_factory=lambda: VisualStyle(size=LINE_WIDTH_DEFAULT))
+    arrow: ArrowSettings = Field(default_factory=ArrowSettings)
+
+    @model_validator(mode='after')
+    def validate_different_endpoints(self) -> 'CurveLine':
+        if self.start_uid and self.end_uid and self.start_uid == self.end_uid:
+            raise ValueError("Curve line cannot connect composition to itself")
         return self
 
 
@@ -242,14 +296,15 @@ class GridSettings(BaseModel):
 class ProjectData(BaseModel):
     """Корневой объект проекта"""
     model_config = ConfigDict(validate_assignment=True)
-    
+
     components: List[str] = Field(default_factory=lambda: ["A", "B", "C"])
     compositions: List[NamedComposition] = Field(default_factory=list)
     lines: List[TieLine] = Field(default_factory=list)
+    curve_lines: List[CurveLine] = Field(default_factory=list)
     grid: GridSettings = Field(default_factory=GridSettings)
     is_inverted: bool = False
     vertex_labels_pos: Dict[str, Tuple[float, float]] = Field(default_factory=dict)
-    
+
     @field_validator('components')
     @classmethod
     def validate_components(cls, v: List[str]) -> List[str]:
@@ -257,18 +312,24 @@ class ProjectData(BaseModel):
         if len(v) != 3:
             raise ValueError(f"Expected 3 components, got {len(v)}")
         return [str(c) if c else f"C{i+1}" for i, c in enumerate(v)]
-    
+
     @model_validator(mode='after')
     def validate_line_references(self) -> 'ProjectData':
         """Проверка целостности ссылок в линиях"""
         comp_uids = {c.uid for c in self.compositions}
-        
+
         for line in self.lines:
             if line.start_uid and line.start_uid not in comp_uids:
                 raise ValueError(f"Line references unknown composition: {line.start_uid}")
             if line.end_uid and line.end_uid not in comp_uids:
                 raise ValueError(f"Line references unknown composition: {line.end_uid}")
-        
+
+        for cline in self.curve_lines:
+            if cline.start_uid and cline.start_uid not in comp_uids:
+                raise ValueError(f"Curve line references unknown composition: {cline.start_uid}")
+            if cline.end_uid and cline.end_uid not in comp_uids:
+                raise ValueError(f"Curve line references unknown composition: {cline.end_uid}")
+
         return self
 
 

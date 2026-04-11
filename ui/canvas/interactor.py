@@ -13,23 +13,45 @@ class CanvasInteractor(QObject):
     Отвечает за обработку событий мыши:
     - Испускание mouse_moved
     - Drag & Drop текстовых меток
+    - Режим выбора guide-точки для CurveLine (GUIDE_PICK)
     """
     mouse_moved = Signal(Composition)
     annotation_dropped = Signal(str, float, float)
     vertex_label_dropped = Signal(int, float, float)
+    # Испускается в режиме GUIDE_PICK при клике по холсту
+    guide_point_picked = Signal(Composition)
+
+    MODE_NORMAL = "normal"
+    MODE_GUIDE_PICK = "guide_pick"
 
     def __init__(self, canvas_widget: 'PlotCanvas'):
         super().__init__()
         self._canvas = canvas_widget
+        self._mode: str = self.MODE_NORMAL
         self._is_dragging = False
         self.dragged_item_uid: str | None = None
         self.dragged_artist = None  # matplotlib Text artist
         self.drag_offset: tuple[float, float] = (0.0, 0.0)
 
+    def set_mode(self, mode: str) -> None:
+        """Переключает режим интерактора. mode: MODE_NORMAL | MODE_GUIDE_PICK"""
+        self._mode = mode
+
     def on_press(self, event: MouseEvent) -> None:
         if event.button != 1 or not event.inaxes:
             return
-        
+
+        # Режим выбора guide-точки: клик испускает координаты и не делает ничего другого
+        if self._mode == self.MODE_GUIDE_PICK:
+            if event.xdata is not None and event.ydata is not None:
+                is_inv = (
+                    self._canvas.current_project.is_inverted
+                    if self._canvas.current_project else False
+                )
+                comp = math_utils.cart_to_bary(event.xdata, event.ydata, is_inv)
+                self.guide_point_picked.emit(comp)
+            return
+
         # Ищем, по чему кликнули (текстовые метки)
         for artist in self._canvas.ax.texts:
             contains, _ = artist.contains(event)

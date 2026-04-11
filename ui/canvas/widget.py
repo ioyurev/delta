@@ -2,7 +2,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QSizePolicy
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 
 from delta.models import Composition, RenderOverlay, ProjectData
 
@@ -208,7 +208,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         locked=True:  'equal' — 1 единица X = 1 единица Y
         locked=False: 'auto'  — оси растягиваются по доступному пространству
         """
-        mode = 'equal' if locked else 'auto'
+        mode: Literal['equal', 'auto'] = 'equal' if locked else 'auto'
         self.project_renderer.set_aspect_mode(mode)
         self._static_background = None
         self._needs_full_redraw = True

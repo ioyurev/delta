@@ -20,6 +20,7 @@ from ui.widgets.compositions_table import CompositionsTable
 from ui.widgets.lines_manager import LinesManager
 from ui.widgets.style_dialog import CompositionStyleDialog
 from ui.widgets.line_dialog import LineDialog
+from ui.widgets.curve_line_dialog import CurveLineDialog
 from ui.widgets.intersection_dialog import IntersectionDialog
 from ui.widgets.analysis_panel import AnalysisPanel
 from ui.widgets.about_dialog import AboutDialog
@@ -50,7 +51,10 @@ class MainWindow(QMainWindow):
         
         # Контроллер — единственный источник правды
         self.controller = ProjectController()
-        
+
+        # Активный диалог кривой (немодальный — может быть открыт параллельно)
+        self._active_curve_dlg: CurveLineDialog | None = None
+
         # Инициализация UI
         self._init_menu()
         self._init_central_widget()
@@ -225,11 +229,19 @@ class MainWindow(QMainWindow):
         self.table_widget.request_delete_composition.connect(self._on_comp_delete_req)
         self.table_widget.validation_error.connect(self._on_validation_error)
         
-        # Lines Manager
+        # Lines Manager — straight lines
         self.lines_widget.request_add_line.connect(self._on_line_add_req)
         self.lines_widget.request_edit_line.connect(self._on_line_edit_req)
         self.lines_widget.request_delete_line.connect(self._on_line_del_req)
         self.lines_widget.request_calc_dialog.connect(self._open_calc_dialog)
+
+        # Lines Manager — curve lines
+        self.lines_widget.request_add_curve_line.connect(self._on_curve_line_add_req)
+        self.lines_widget.request_edit_curve_line.connect(self._on_curve_line_edit_req)
+        self.lines_widget.request_delete_curve_line.connect(self._on_curve_line_del_req)
+
+        # Canvas interactor — guide point pick
+        self.canvas.interactor.guide_point_picked.connect(self._on_guide_point_picked)
         
         # Analysis Panel
         self.analysis_widget.update_needed.connect(self._refresh_ui)
@@ -403,8 +415,9 @@ class MainWindow(QMainWindow):
                 self.controller.update_line_style(line_uid, StyleUpdate(
                     color=data.color,
                     line_style=data.line_style,
-                    size=data.width
+                    size=data.width,
                 ))
+                self.controller.update_line_arrow(line_uid, data.arrow)
                 self.statusBar().showMessage("Line created", 3000)
             except ValidationError as e:
                 QMessageBox.warning(self, "Invalid Line", str(e))
@@ -415,8 +428,8 @@ class MainWindow(QMainWindow):
     def _on_line_edit_req(self, uid: str):
         line_obj = self.controller.get_line(uid)
         self.canvas.set_highlight_line(uid)
-        
-        dlg = LineDialog(self.controller.get_all_compositions(), 
+
+        dlg = LineDialog(self.controller.get_all_compositions(),
                          current_line=line_obj, parent=self)
         if dlg.exec():
             data = dlg.get_data()
@@ -424,10 +437,117 @@ class MainWindow(QMainWindow):
             self.controller.update_line_style(uid, StyleUpdate(
                 color=data.color,
                 line_style=data.line_style,
-                size=data.width
+                size=data.width,
             ))
-        
+            self.controller.update_line_arrow(uid, data.arrow)
+
         self.canvas.set_highlight_line(None)
+
+    # =========================================================================
+    # ОБРАБОТЧИКИ: CURVE LINES
+    # =========================================================================
+
+    def _on_curve_line_add_req(self):
+        dlg = CurveLineDialog(self.controller.get_all_compositions(), parent=self)
+        self._attach_curve_dlg(dlg)
+        dlg.show()
+
+    @handle_entity_errors
+    def _on_curve_line_edit_req(self, uid: str):
+        cline = self.controller.get_curve_line(uid)
+        self.canvas.set_highlight_line(uid)
+        dlg = CurveLineDialog(
+            self.controller.get_all_compositions(),
+            current_line=cline,
+            parent=self,
+        )
+        self._attach_curve_dlg(dlg)
+        dlg.show()
+
+    def _attach_curve_dlg(self, dlg: CurveLineDialog) -> None:
+        """Подключает сигналы диалога кривой и сохраняет ссылку."""
+        if self._active_curve_dlg is not None:
+            self._active_curve_dlg.close()
+
+        self._active_curve_dlg = dlg
+        dlg.request_canvas_pick.connect(self._on_curve_dlg_pick_req)
+        dlg.accepted.connect(self._on_curve_dlg_accepted)
+        dlg.rejected.connect(self._on_curve_dlg_closed)
+        dlg.finished.connect(self._on_curve_dlg_closed)
+
+    def _on_curve_dlg_pick_req(self) -> None:
+        """Переключает интерактор в режим выбора guide-точки."""
+        from ui.canvas.interactor import CanvasInteractor
+        self.canvas.interactor.set_mode(CanvasInteractor.MODE_GUIDE_PICK)
+        self.statusBar().showMessage(
+            "Click on the diagram to add a guide point. Esc to cancel.", 0
+        )
+
+    def _on_guide_point_picked(self, comp: Composition) -> None:
+        """Получает guide-точку от холста и передаёт в открытый диалог."""
+        from ui.canvas.interactor import CanvasInteractor
+        self.canvas.interactor.set_mode(CanvasInteractor.MODE_NORMAL)
+        self.statusBar().clearMessage()
+
+        if self._active_curve_dlg and self._active_curve_dlg.isVisible():
+            self._active_curve_dlg.add_guide_point_from_canvas(comp)
+            self._active_curve_dlg.raise_()
+            self._active_curve_dlg.activateWindow()
+
+    def _on_curve_dlg_accepted(self) -> None:
+        dlg = self._active_curve_dlg
+        if dlg is None:
+            return
+        data = dlg.get_data()
+        try:
+            if data.uid:
+                # Редактирование
+                self.controller.update_curve_line_endpoints(
+                    data.uid, data.start_uid, data.end_uid
+                )
+                self.controller.update_curve_line_style(data.uid, StyleUpdate(
+                    color=data.color,
+                    line_style=data.line_style,
+                    size=data.width,
+                ))
+                self.controller.update_curve_line_arrow(data.uid, data.arrow)
+                self.controller.update_curve_line_guides(data.uid, data.guide_points)
+                self.statusBar().showMessage("Curve line updated", 3000)
+            else:
+                # Создание
+                uid = self.controller.create_curve_line(data.start_uid, data.end_uid)
+                self.controller.update_curve_line_style(uid, StyleUpdate(
+                    color=data.color,
+                    line_style=data.line_style,
+                    size=data.width,
+                ))
+                self.controller.update_curve_line_arrow(uid, data.arrow)
+                self.controller.update_curve_line_guides(uid, data.guide_points)
+                self.statusBar().showMessage("Curve line created", 3000)
+        except (ValidationError, EntityNotFoundError) as e:
+            QMessageBox.warning(self, "Error", str(e))
+        finally:
+            self.canvas.set_highlight_line(None)
+
+    def _on_curve_dlg_closed(self) -> None:
+        from ui.canvas.interactor import CanvasInteractor
+        self.canvas.interactor.set_mode(CanvasInteractor.MODE_NORMAL)
+        self.canvas.set_highlight_line(None)
+        self._active_curve_dlg = None
+        self.statusBar().clearMessage()
+
+    @handle_entity_errors
+    def _on_curve_line_del_req(self, uid: str):
+        try:
+            cline = self.controller.get_curve_line(uid)
+            start = self.controller.find_composition(cline.start_uid)
+            end = self.controller.find_composition(cline.end_uid)
+            name = f"'{start.name if start else '?'}' — '{end.name if end else '?'}'"
+        except EntityNotFoundError:
+            name = "curve line"
+
+        self.controller.delete_curve_line(uid)
+        self.statusBar().showMessage(f"Deleted {name}", 3000)
 
     def _open_calc_dialog(self):
         if self.controller.get_line_count() < 2:
