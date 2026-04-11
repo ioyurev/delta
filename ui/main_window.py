@@ -253,6 +253,7 @@ class MainWindow(QMainWindow):
 
         # Display Region
         self.region_widget.region_changed.connect(self._on_region_changed)
+        self.region_widget.enabled_changed.connect(self._on_region_enabled_changed)
 
     def _on_validation_error(self, message: str):
         """Показывает ошибку/предупреждение валидации в StatusBar"""
@@ -622,8 +623,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Aspect ratio: {mode}", 2000)
 
     def _on_region_changed(self, points: list) -> None:
-        """Обновляет область отображения в проекте"""
         self.controller.update_display_region(points)
+
+    def _on_region_enabled_changed(self, enabled: bool) -> None:
+        self.controller.update_display_region_enabled(enabled)
 
     # =========================================================================
     # УПРАВЛЕНИЕ СОСТОЯНИЕМ ОКНА

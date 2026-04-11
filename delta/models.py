@@ -310,6 +310,7 @@ class ProjectData(BaseModel):
     is_inverted: bool = False
     lock_aspect: bool = True
     display_region: List[Composition] = Field(default_factory=list)
+    display_region_enabled: bool = False
     vertex_labels_pos: Dict[str, Tuple[float, float]] = Field(default_factory=dict)
 
     @field_validator('components')

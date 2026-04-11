@@ -148,6 +148,9 @@ class ProjectController(QObject):
     def update_display_region(self, points: List[Composition]) -> None:
         self._manager.update_display_region(points)
 
+    def update_display_region_enabled(self, enabled: bool) -> None:
+        self._manager.update_display_region_enabled(enabled)
+
     def update_components(self, names: List[str]) -> None:
         self._manager.update_components(names)
 

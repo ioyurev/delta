@@ -4,7 +4,7 @@ from typing import List
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QHeaderView,
-    QDoubleSpinBox,
+    QCheckBox, QDoubleSpinBox,
 )
 from PySide6.QtCore import Signal
 
@@ -22,9 +22,11 @@ class DisplayRegionWidget(QWidget):
 
     Signals:
         region_changed(List[Composition]): raw-координаты точек полигона
+        enabled_changed(bool): включение/отключение маски
     """
 
     region_changed = Signal(list)
+    enabled_changed = Signal(bool)
 
     _COL_A = 0
     _COL_B = 1
@@ -40,6 +42,14 @@ class DisplayRegionWidget(QWidget):
         )
         info.setWordWrap(True)
         layout.addWidget(info)
+
+        self._chk_enabled = QCheckBox("Enable display region mask")
+        self._chk_enabled.setToolTip(
+            "When checked, everything outside the polygon is hidden\n"
+            "and the diagram scale adapts to the polygon bounding box."
+        )
+        self._chk_enabled.toggled.connect(self._on_enabled_toggled)
+        layout.addWidget(self._chk_enabled)
 
         self._table = CopyableTableWidget()
         self._table.setColumnCount(3)
@@ -69,9 +79,13 @@ class DisplayRegionWidget(QWidget):
     # =========================================================================
 
     def update_view(self, project_data: ProjectData) -> None:
-        """Загружает точки из project_data, обновляет заголовки по компонентам."""
+        """Загружает состояние из project_data."""
         names = project_data.components
         self._table.setHorizontalHeaderLabels(list(names))
+
+        self._chk_enabled.blockSignals(True)
+        self._chk_enabled.setChecked(project_data.display_region_enabled)
+        self._chk_enabled.blockSignals(False)
 
         self._block_emit = True
         self._table.setRowCount(0)
@@ -108,12 +122,19 @@ class DisplayRegionWidget(QWidget):
 
     def _update_status(self) -> None:
         n = self._table.rowCount()
-        if n == 0:
-            self._status.setText("Region inactive (no points).")
+        enabled = self._chk_enabled.isChecked()
+        if not enabled:
+            self._status.setText("Mask disabled.")
+        elif n == 0:
+            self._status.setText("⚠ No points defined.")
         elif n < 3:
             self._status.setText(f"⚠ Need at least 3 points (current: {n}).")
         else:
             self._status.setText(f"✔ Region active ({n} points).")
+
+    def _on_enabled_toggled(self, enabled: bool) -> None:
+        self._update_status()
+        self.enabled_changed.emit(enabled)
 
     def _on_add(self) -> None:
         self._append_row(33.0, 33.0, 34.0)

@@ -191,8 +191,12 @@ class ProjectRenderer:
         if highlight_uids:
             self.apply_highlights(highlight_uids)
 
-        # 8. Маска области отображения (если задана)
-        region_cart = self._valid_region_cart(project.display_region, is_inv)
+        # 8. Маска области отображения (если задана и включена)
+        region_cart = (
+            self._valid_region_cart(project.display_region, is_inv)
+            if project.display_region_enabled
+            else []
+        )
         if region_cart:
             self._draw_region_mask(region_cart)
             rx = [pt[0] for pt in region_cart]

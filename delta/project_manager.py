@@ -302,6 +302,11 @@ class ProjectManager:
         self._project.display_region = list(points)
         self._notify_change(save_undo=False)
 
+    def update_display_region_enabled(self, enabled: bool) -> None:
+        self._save_undo_before_change()
+        self._project.display_region_enabled = enabled
+        self._notify_change(save_undo=False)
+
     def update_view_mode(self, is_inverted: bool) -> None:
         if self._project.is_inverted == is_inverted:
             return
