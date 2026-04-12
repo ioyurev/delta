@@ -24,6 +24,7 @@ Every change to the project must follow this sequence:
 
 1. Make code changes
 2. Run quality checks (ruff + mypy — both must pass, see above)
-3. Update this documentation if the change affects workflow, conventions, or architecture
+3. Update user-facing documentation (`README.md`, `MANUAL.md`) if the change adds, removes, or alters visible functionality
 4. Bump the version in `pyproject.toml`
-5. Commit with a descriptive message
+5. Run `uv sync` to update the lock file after the version bump
+6. Commit with a descriptive message
