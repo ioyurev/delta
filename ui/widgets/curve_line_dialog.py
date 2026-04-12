@@ -29,7 +29,7 @@ from delta.models import (
 from delta.constants import LINE_WIDTH_DEFAULT, ARROW_COUNT_MIN, ARROW_COUNT_MAX
 from ui.widgets.helpers import (
     create_line_width_spin, create_marker_size_spin, create_coord_spin,
-    ColorPickerButton, CopyableTableWidget,
+    ColorPickerButton, CopyableTableWidget, mathtext_to_plain,
 )
 
 if TYPE_CHECKING:
@@ -163,7 +163,7 @@ class CurveLineDialog(QDialog):
 
         sorted_comps = sorted(self._compositions, key=lambda p: p.name)
         for p in sorted_comps:
-            nm = p.name or "[Unnamed]"
+            nm = mathtext_to_plain(p.name) if p.name else "[Unnamed]"
             self.cb_start.addItem(nm, p.uid)
             self.cb_end.addItem(nm, p.uid)
 

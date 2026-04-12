@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QHBoxLayout, QSpinBox,
 )
 from ui.widgets.base_dialog import BaseFormDialog
-from ui.widgets.helpers import create_line_width_spin, ColorPickerButton
+from ui.widgets.helpers import create_line_width_spin, ColorPickerButton, mathtext_to_plain
 from delta.models import TieLine, NamedComposition, VisualStyle, ArrowSettings
 from delta.constants import LINE_WIDTH_DEFAULT, ARROW_COUNT_MIN, ARROW_COUNT_MAX
 from typing import Optional
@@ -69,7 +69,7 @@ class LineDialog(BaseFormDialog[LineDialogResult]):
 
         sorted_compositions = sorted(self._compositions, key=lambda p: p.name)
         for p in sorted_compositions:
-            nm = p.name if p.name else "[Unnamed]"
+            nm = mathtext_to_plain(p.name) if p.name else "[Unnamed]"
             self.cb_start.addItem(nm, p.uid)
             self.cb_end.addItem(nm, p.uid)
 

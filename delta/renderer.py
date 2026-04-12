@@ -43,7 +43,12 @@ class ProjectRenderer:
         self.ax.set_facecolor(COLOR_BACKGROUND)
         self._line_artists.clear()
 
-    def draw_static_project(self, project: ProjectData, highlight_uids: list[str] | None = None):
+    def draw_static_project(
+        self,
+        project: ProjectData,
+        highlight_uids: list[str] | None = None,
+        highlight_comp_uids: list[str] | None = None,
+    ):
         """Полная перерисовка проекта"""
         self.clear()
         is_inv = project.is_inverted
@@ -152,7 +157,7 @@ class ProjectRenderer:
 
             # Маркер
             if comp.style.show_marker:
-                self.ax.plot(
+                marker_artist, = self.ax.plot(
                     pt[0], pt[1],
                     marker=comp.style.marker_symbol,
                     color=comp.style.color,
@@ -160,6 +165,8 @@ class ProjectRenderer:
                     zorder=ZORDER_MASK + 1,
                     linestyle='None'
                 )
+                if highlight_comp_uids and comp.uid in highlight_comp_uids:
+                    marker_artist.set_path_effects(get_highlight_effect())
 
             # Метка — выше маски (ZORDER_MASK + 1), чтобы не закрывалась
             # даже если состав находится на границе области отображения
@@ -271,6 +278,31 @@ class ProjectRenderer:
             point, = self.ax.plot(
                 pt[0], pt[1], marker='X', color=COLOR_INTERSECTION,
                 markersize=10, zorder=ZORDER_INTERSECTION, markeredgecolor='white', markeredgewidth=1, animated=False
+            )
+            temp_artists.append(point)
+
+        if overlay.mix_baseline:
+            item = overlay.mix_baseline
+            p1 = math_utils.bary_to_cart(item.start, is_inverted)
+            p2 = math_utils.bary_to_cart(item.end, is_inverted)
+            line, = self.ax.plot(
+                [p1[0], p2[0]], [p1[1], p2[1]],
+                color=item.color, linestyle=item.style,
+                lw=1.5, alpha=0.85, zorder=ZORDER_OVERLAY, animated=False
+            )
+            if item.highlight:
+                line.set_path_effects(get_highlight_effect())
+            temp_artists.append(line)
+
+        if overlay.mix_preview_point:
+            pt = math_utils.bary_to_cart(overlay.mix_preview_point, is_inverted)
+            point, = self.ax.plot(
+                pt[0], pt[1],
+                marker=overlay.mix_preview_symbol,
+                color=overlay.mix_preview_color,
+                markersize=overlay.mix_preview_size,
+                zorder=ZORDER_INTERSECTION,
+                markeredgecolor='white', markeredgewidth=0.8, animated=False
             )
             temp_artists.append(point)
 

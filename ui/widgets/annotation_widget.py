@@ -12,7 +12,7 @@ from PySide6.QtCore import Signal, Qt
 
 from delta.models import ProjectData, TextAnnotation, Composition
 from ui.widgets.helpers import (
-    ColorPickerButton, create_double_spin, PickableCoordWidget,
+    ColorPickerButton, create_double_spin, PickableCoordWidget, mathtext_to_plain,
 )
 
 
@@ -202,7 +202,7 @@ class AnnotationWidget(QWidget):
         self._list.blockSignals(True)
         self._list.clear()
         for ann in project_data.annotations:
-            item = QListWidgetItem(ann.text or "<empty>")
+            item = QListWidgetItem(mathtext_to_plain(ann.text) if ann.text else "<empty>")
             item.setData(Qt.ItemDataRole.UserRole, ann.uid)
             item.setCheckState(
                 Qt.CheckState.Checked if ann.visible else Qt.CheckState.Unchecked

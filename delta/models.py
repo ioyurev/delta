@@ -408,10 +408,16 @@ class OverlayLine:
 class RenderOverlay:
     """Контейнер для временных объектов на холсте"""
     highlight_lines_uids: List[str] = field(default_factory=list)
+    highlight_comp_uids: List[str] = field(default_factory=list)
     extrap_lines: List[OverlayLine] = field(default_factory=list)
     projection_point: Optional[Composition] = None
     intersect_point: Optional[Composition] = None
     triangle_overlay: List[Composition] = field(default_factory=list)
+    mix_preview_point: Optional[Composition] = None
+    mix_preview_color: str = "#e67e00"
+    mix_preview_symbol: str = "*"
+    mix_preview_size: float = 14.0
+    mix_baseline: Optional['OverlayLine'] = None
 
 
 # =============================================================================

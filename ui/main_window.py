@@ -57,6 +57,8 @@ class MainWindow(QMainWindow):
 
         # Активный диалог кривой (немодальный — может быть открыт параллельно)
         self._active_curve_dlg: CurveLineDialog | None = None
+        # Немодальный диалог Lever Mix
+        self._lever_mix_dlg = None
         # Кто ожидает результат выбора точки на холсте: "" | "curve" | "annotation:{field}"
         self._pending_pick_requester: str = ""
 
@@ -258,6 +260,9 @@ class MainWindow(QMainWindow):
         
         # Analysis Panel
         self.analysis_widget.update_needed.connect(self._refresh_ui)
+        self.analysis_widget.open_lever_mix_requested.connect(
+            self._on_open_lever_mix
+        )
 
         # Display Region
         self.region_widget.region_changed.connect(self._on_region_changed)
@@ -367,8 +372,18 @@ class MainWindow(QMainWindow):
     @handle_entity_errors
     def _on_comp_style_req(self, uid: str):
         comp = self.controller.get_composition(uid)
+
+        # Подсвечиваем маркер на холсте пока диалог открыт
+        overlay = self.analysis_widget.get_overlay_data()
+        overlay.highlight_comp_uids = [uid]
+        self.canvas.draw_project(self.controller.project_data, overlay, force_full_redraw=True)
+
         dlg = CompositionStyleDialog(comp, self)
-        if dlg.exec():
+        accepted = dlg.exec()
+
+        # Убираем подсветку
+        overlay.highlight_comp_uids = []
+        if accepted:
             data = dlg.get_data()
             self.controller.update_composition_style(uid, StyleUpdate(
                 color=data.color,
@@ -378,6 +393,7 @@ class MainWindow(QMainWindow):
                 show_marker=data.show_marker
             ))
             self.statusBar().showMessage(f"Style updated for '{comp.name}'", 3000)
+        self._refresh_ui()
 
     @handle_entity_errors
     def _on_comp_delete_req(self, uid: str):
@@ -393,14 +409,121 @@ class MainWindow(QMainWindow):
         self.controller.set_composition_label_pos(uid=uid, x=x, y=y)
         self.statusBar().showMessage("Label position saved", 2000)
 
+    # ------------------------------------------------------------------
+    # Lever Mix dialog
+    # ------------------------------------------------------------------
+
+    def _on_open_lever_mix(self) -> None:
+        """Открывает (или поднимает) немодальный диалог Lever Mix."""
+        from ui.widgets.lever_mix_dialog import LeverMixDialog
+
+        if hasattr(self, '_lever_mix_dlg') and self._lever_mix_dlg is not None:
+            self._lever_mix_dlg.raise_()
+            self._lever_mix_dlg.activateWindow()
+            return
+
+        comps = sorted(self.controller.get_all_compositions(), key=lambda p: p.name)
+        components = self.controller.get_components()
+        dlg = LeverMixDialog(comps, components, parent=self)
+        self._lever_mix_dlg = dlg
+
+        dlg.preview_changed.connect(self._on_lever_mix_preview)
+        dlg.composition_accepted.connect(self._on_lever_mix_add)
+        dlg.finished.connect(self._on_lever_mix_closed)
+
+        dlg.show()
+
+    def _on_lever_mix_preview(self, payload: object) -> None:
+        """Обновляет предпросмотр маркера и базовой линии на холсте.
+
+        payload — tuple (result, end_a, end_b, style) либо None при ошибке/закрытии.
+        """
+        from delta.models import Composition as _Comp, OverlayLine
+        from ui.widgets.helpers import MarkerStyleData
+        overlay = self.analysis_widget.get_overlay_data()
+        if isinstance(payload, tuple) and len(payload) == 4:
+            result, end_a, end_b, style = payload
+            overlay.mix_preview_point = result if isinstance(result, _Comp) else None
+            if isinstance(style, MarkerStyleData):
+                overlay.mix_preview_color = style.color
+                overlay.mix_preview_symbol = style.symbol
+                overlay.mix_preview_size = style.size
+            if isinstance(end_a, _Comp) and isinstance(end_b, _Comp):
+                baseline_color = style.color if isinstance(style, MarkerStyleData) else "#e67e00"
+                overlay.mix_baseline = OverlayLine(
+                    start=end_a, end=end_b,
+                    color=baseline_color, style="--", highlight=False,
+                )
+            else:
+                overlay.mix_baseline = None
+        else:
+            overlay.mix_preview_point = None
+            overlay.mix_baseline = None
+        if self.canvas.current_project:
+            self.canvas.draw_project(self.canvas.current_project, overlay)
+
+    def _on_lever_mix_add(self, payload: object) -> None:
+        """Добавляет состав, полученный правилом рычага, в проект."""
+        from ui.widgets.helpers import MarkerStyleData
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        composition, style = payload
+        if not isinstance(composition, Composition):
+            return
+        try:
+            uid = self.controller.create_composition(
+                name="Mix",
+                a=float(composition.a),
+                b=float(composition.b),
+                c=float(composition.c),
+            )
+            if isinstance(style, MarkerStyleData):
+                self.controller.update_composition_style(
+                    uid,
+                    StyleUpdate(
+                        color=style.color,
+                        marker_symbol=style.symbol,
+                        size=style.size,
+                    ),
+                )
+            self.statusBar().showMessage("Lever mix composition added", 3000)
+            self.table_widget.select_composition(uid)
+            # Обновляем список составов в диалоге
+            if hasattr(self, '_lever_mix_dlg') and self._lever_mix_dlg is not None:
+                comps = sorted(
+                    self.controller.get_all_compositions(), key=lambda p: p.name
+                )
+                self._lever_mix_dlg.refresh_compositions(comps)
+        except Exception as exc:
+            QMessageBox.warning(self, "Creation Error", str(exc))
+
+    def _on_lever_mix_closed(self) -> None:
+        """Убирает предпросмотр и освобождает диалог."""
+        self._on_lever_mix_preview(None)
+        self._lever_mix_dlg = None
+
     def _on_composition_added(self) -> None:
         """Обработчик добавления нового состава"""
         try:
-            # Передаем начальные координаты, отличные от нуля.
-            # (0, 0, 0) вызывает ошибку валидации в ProjectManager.
+            # Default coordinates: center of the currently visible canvas region.
+            try:
+                xlim = self.canvas.ax.get_xlim()
+                ylim = self.canvas.ax.get_ylim()
+                cx = (xlim[0] + xlim[1]) / 2
+                cy = (ylim[0] + ylim[1]) / 2
+                is_inv = self.controller.project_data.is_inverted
+                center = math_utils.cart_to_bary(cx, cy, is_inv)
+                a = max(0.01, float(center.a))
+                b = max(0.01, float(center.b))
+                c = max(0.01, float(center.c))
+                total = a + b + c
+                a, b, c = a / total, b / total, c / total
+            except Exception:
+                a, b, c = 0.33, 0.33, 0.34
+
             uid = self.controller.create_composition(
-                name="New Point", 
-                a=0.33, b=0.33, c=0.34
+                name="New Point",
+                a=a, b=b, c=c
             )
             
             # Обратная связь

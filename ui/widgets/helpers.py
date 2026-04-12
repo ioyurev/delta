@@ -1,14 +1,16 @@
 """Вспомогательные функции и виджеты для UI"""
 
+from dataclasses import dataclass
+from functools import wraps
+from contextlib import contextmanager
+
 from PySide6.QtWidgets import (
-    QDoubleSpinBox, QMenu, QComboBox, QPushButton, QColorDialog,
+    QDoubleSpinBox, QFormLayout, QMenu, QComboBox, QPushButton, QColorDialog,
     QApplication, QTableWidget, QHBoxLayout, QLabel, QWidget,
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QColor, QCursor, QPalette, QKeyEvent
 from typing import Callable, Optional, TypeVar, ParamSpec, Sequence
-from functools import wraps
-from contextlib import contextmanager
 from delta.constants import (
     MARKER_SIZE_MIN,
     MARKER_SIZE_MAX,
@@ -24,8 +26,205 @@ T = TypeVar('T')
 
 
 # =============================================================================
+# MATHTEXT → UNICODE (подстрочные/надстрочные символы, греческий алфавит)
+# =============================================================================
+
+_SUBSCRIPT: dict[str, str] = {
+    "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
+    "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
+    "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
+    "a": "ₐ", "e": "ₑ", "o": "ₒ", "x": "ₓ",
+    "h": "ₕ", "k": "ₖ", "l": "ₗ", "m": "ₘ", "n": "ₙ",
+    "p": "ₚ", "s": "ₛ", "t": "ₜ", "i": "ᵢ", "r": "ᵣ",
+    "u": "ᵤ", "v": "ᵥ",
+}
+
+_SUPERSCRIPT: dict[str, str] = {
+    "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
+    "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+    "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+    "a": "ᵃ", "b": "ᵇ", "c": "ᶜ", "d": "ᵈ", "e": "ᵉ",
+    "f": "ᶠ", "g": "ᵍ", "h": "ʰ", "i": "ⁱ", "j": "ʲ",
+    "k": "ᵏ", "l": "ˡ", "m": "ᵐ", "n": "ⁿ", "o": "ᵒ",
+    "p": "ᵖ", "r": "ʳ", "s": "ˢ", "t": "ᵗ", "u": "ᵘ",
+    "v": "ᵛ", "w": "ʷ", "x": "ˣ", "y": "ʸ", "z": "ᶻ",
+}
+
+_GREEK: dict[str, str] = {
+    "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ",
+    "epsilon": "ε", "zeta": "ζ", "eta": "η", "theta": "θ",
+    "iota": "ι", "kappa": "κ", "lambda": "λ", "mu": "μ",
+    "nu": "ν", "xi": "ξ", "pi": "π", "rho": "ρ",
+    "sigma": "σ", "tau": "τ", "upsilon": "υ", "phi": "φ",
+    "chi": "χ", "psi": "ψ", "omega": "ω",
+    "Alpha": "Α", "Beta": "Β", "Gamma": "Γ", "Delta": "Δ",
+    "Epsilon": "Ε", "Zeta": "Ζ", "Eta": "Η", "Theta": "Θ",
+    "Iota": "Ι", "Kappa": "Κ", "Lambda": "Λ", "Mu": "Μ",
+    "Nu": "Ν", "Xi": "Ξ", "Pi": "Π", "Rho": "Ρ",
+    "Sigma": "Σ", "Tau": "Τ", "Upsilon": "Υ", "Phi": "Φ",
+    "Chi": "Χ", "Psi": "Ψ", "Omega": "Ω",
+    "cdot": "·", "times": "×", "pm": "±", "infty": "∞",
+}
+
+
+def _apply_script(chars: str, table: dict[str, str]) -> str:
+    """Применяет таблицу sub/superscript к каждому символу (fallback — оригинал)."""
+    return "".join(table.get(c, c) for c in chars)
+
+
+def _parse_math(s: str) -> str:
+    """Разбирает строку в math-режиме matplotlib MathText → unicode."""
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            # Команда: читаем буквы до конца
+            j = i + 1
+            while j < n and s[j].isalpha():
+                j += 1
+            cmd = s[i + 1 : j]
+            out.append(_GREEK.get(cmd, cmd))
+            i = j
+        elif c in ("_", "^"):
+            table = _SUBSCRIPT if c == "_" else _SUPERSCRIPT
+            i += 1
+            if i >= n:
+                break
+            if s[i] == "{":
+                # Ищем закрывающую }
+                depth, j = 1, i + 1
+                while j < n and depth:
+                    if s[j] == "{":
+                        depth += 1
+                    elif s[j] == "}":
+                        depth -= 1
+                    j += 1
+                group = _parse_math(s[i + 1 : j - 1])
+                out.append(_apply_script(group, table))
+                i = j
+            else:
+                out.append(table.get(s[i], s[i]))
+                i += 1
+        elif c in ("{", "}"):
+            i += 1  # скобки группировки — просто пропускаем
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def mathtext_to_plain(text: str) -> str:
+    """
+    Преобразует matplotlib MathText-строку в читаемый unicode-текст.
+
+    Поддерживает:
+    - подстрочные ``$_2$``, ``$_{3-x}$``
+    - надстрочные ``$^2$``, ``$^{n+1}$``
+    - греческие буквы ``$\\alpha$``, ``$\\Omega$``
+    - смешанные имена ``Th$_3$P$_4$``, ``$Gd_{2}S_3$``
+
+    Символы без unicode-аналога остаются как есть.
+    Строки без ``$`` возвращаются без изменений.
+    """
+    if "$" not in text:
+        return text
+    parts = text.split("$")
+    result: list[str] = []
+    for idx, part in enumerate(parts):
+        result.append(_parse_math(part) if idx % 2 else part)
+    return "".join(result)
+
+
+# =============================================================================
+# МАРКЕРЫ — общие константы и данные
+# =============================================================================
+
+MARKER_SYMBOLS: dict[str, str] = {
+    "Circle (●)": "o",
+    "Square (■)": "s",
+    "Triangle Up (▲)": "^",
+    "Triangle Down (▼)": "v",
+    "Diamond (◆)": "D",
+    "Star (★)": "*",
+    "Cross (x)": "x",
+    "Plus (+)": "P",
+}
+
+
+@dataclass
+class MarkerStyleData:
+    """Параметры стиля маркера."""
+    color: str
+    symbol: str
+    size: float
+
+
+# =============================================================================
 # ВИДЖЕТЫ
 # =============================================================================
+
+class MarkerStyleWidget(QWidget):
+    """
+    Переиспользуемый виджет параметров стиля маркера.
+
+    Показывает три строки: Color / Size / Shape.
+    Испускает ``style_changed(MarkerStyleData)`` при любом изменении.
+    """
+
+    style_changed = Signal(object)   # MarkerStyleData
+
+    def __init__(
+        self,
+        color: str = "#000000",
+        symbol: str = "o",
+        size: float = MARKER_SIZE_DEFAULT,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(6)
+
+        self._btn_color = ColorPickerButton(color)
+        self._btn_color.setToolTip("Marker color")
+        form.addRow("Color:", self._btn_color)
+
+        self._spin_size = create_marker_size_spin(value=size)
+        self._spin_size.setToolTip("Marker size in points")
+        form.addRow("Size:", self._spin_size)
+
+        self._cb_symbol = QComboBox()
+        for name, code in MARKER_SYMBOLS.items():
+            self._cb_symbol.addItem(name, code)
+        idx = self._cb_symbol.findData(symbol)
+        if idx >= 0:
+            self._cb_symbol.setCurrentIndex(idx)
+        self._cb_symbol.setToolTip("Marker shape")
+        form.addRow("Shape:", self._cb_symbol)
+
+        self._btn_color.color_changed.connect(self._emit)
+        self._spin_size.valueChanged.connect(self._emit)
+        self._cb_symbol.currentIndexChanged.connect(self._emit)
+
+    def get_data(self) -> MarkerStyleData:
+        return MarkerStyleData(
+            color=self._btn_color.color(),
+            symbol=self._cb_symbol.currentData(),
+            size=self._spin_size.value(),
+        )
+
+    def set_data(self, data: MarkerStyleData) -> None:
+        self._btn_color.set_color(data.color)
+        self._spin_size.setValue(data.size)
+        idx = self._cb_symbol.findData(data.symbol)
+        if idx >= 0:
+            self._cb_symbol.setCurrentIndex(idx)
+
+    def _emit(self, *_: object) -> None:
+        self.style_changed.emit(self.get_data())
+
 
 class CopyableTableWidget(QTableWidget):
     """

@@ -374,6 +374,52 @@ def atom_fracs_to_mole_fracs(atom_fracs: List[float], formula_sizes: List[float]
     return [m / total for m in moles]
 
 
+def mix_compositions_by_mol_frac(
+    c1: 'Composition', mol_frac_1: float, c2: 'Composition'
+) -> 'Composition':
+    """
+    Вычисляет состав смеси двух соединений по молярным долям.
+
+    Правило рычага «в обратную сторону»: зная x мол.% соединения 1 и
+    (100-x) мол.% соединения 2, определить состав смеси в координатах
+    вершин треугольника.
+
+    Молярные доли → атомные доли → взвешенная сумма нормированных координат.
+
+    Args:
+        c1: Состав соединения 1.
+        mol_frac_1: Молярная доля соединения 1 (0..1).
+        c2: Состав соединения 2.
+
+    Returns:
+        Composition с координатами, нормированными к сумме 100.
+
+    Raises:
+        ValueError: Если оба состава вырождены (total ≈ 0).
+    """
+    from delta.models import Composition as _Composition
+
+    mol_frac_2 = 1.0 - mol_frac_1
+    n1 = c1.total
+    n2 = c2.total
+
+    denom = mol_frac_1 * n1 + mol_frac_2 * n2
+    if denom < EPSILON_ZERO:
+        raise ValueError("Cannot mix: both compositions have zero total")
+
+    atom1 = mol_frac_1 * n1 / denom
+    atom2 = mol_frac_2 * n2 / denom
+
+    a1, b1, c1n = c1.normalized
+    a2, b2, c2n = c2.normalized
+
+    ra = atom1 * a1 + atom2 * a2
+    rb = atom1 * b1 + atom2 * b2
+    rc = atom1 * c1n + atom2 * c2n
+
+    return _Composition(a=ra * 100.0, b=rb * 100.0, c=rc * 100.0)
+
+
 def find_integer_ratio(floats: List[float]) -> List[int]:
     """
     Универсальный поиск целочисленного соотношения.

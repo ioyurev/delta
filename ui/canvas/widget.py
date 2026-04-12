@@ -102,6 +102,7 @@ class PlotCanvas(FigureCanvasQTAgg):
         self.current_project = project_data
         
         new_highlights = overlay_data.highlight_lines_uids if overlay_data else []
+        highlight_comp_uids = overlay_data.highlight_comp_uids if overlay_data else []
         self._cached_overlay_uids = set(new_highlights)
         
         if self.highlighted_line_uid:
@@ -135,7 +136,9 @@ class PlotCanvas(FigureCanvasQTAgg):
             self._in_draw_cycle = True
             try:
                 self.project_renderer.draw_static_project(
-                    project_data, highlight_uids=new_highlights
+                    project_data,
+                    highlight_uids=new_highlights,
+                    highlight_comp_uids=highlight_comp_uids,
                 )
 
                 # ② Восстанавливаем зум пользователя только вне режима региона
@@ -173,17 +176,18 @@ class PlotCanvas(FigureCanvasQTAgg):
         self._static_background = None
         self._needs_full_redraw = True
 
-    def export_image(self, filename: str) -> None:
-        """Экспортирует текущее состояние в файл"""
-        from delta.export import render_to_file
-        
-        if self.current_project:
-            render_to_file(
-                project_data=self.current_project,
-                filepath=filename,
-                dpi=150,
-                figsize=(8, 7)
-            )
+    def export_image(self, filename: str, dpi: int = 300) -> None:
+        """Экспортирует текущее состояние в файл.
+
+        Сохраняет то, что видит пользователь: текущий зум/пан, аннотации,
+        маску display_region — всё как есть на живом холсте.
+        """
+        self.fig.savefig(
+            filename,
+            dpi=dpi,
+            bbox_inches=None,
+            facecolor='white',
+        )
 
     # === Blitting Helpers ===
 

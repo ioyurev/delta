@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QKeyEvent, QAction, QColor, QBrush
 from delta.models import ProjectData
+from ui.widgets.helpers import mathtext_to_plain
 
 # Маркер типа линии в UserRole+1
 _ROLE_TYPE = Qt.ItemDataRole.UserRole + 1
@@ -88,8 +89,8 @@ class LinesManager(QWidget):
         name_map = {p.uid: (p.name or "???") for p in project_data.compositions}
 
         for line in project_data.lines:
-            n1 = name_map.get(line.start_uid, "Unknown")
-            n2 = name_map.get(line.end_uid, "Unknown")
+            n1 = mathtext_to_plain(name_map.get(line.start_uid, "Unknown"))
+            n2 = mathtext_to_plain(name_map.get(line.end_uid, "Unknown"))
             arrow_mark = " ▶" if line.arrow.enabled else ""
             item = QListWidgetItem(f"─── {n1} — {n2}{arrow_mark}")
             item.setData(Qt.ItemDataRole.UserRole, line.uid)
@@ -97,8 +98,8 @@ class LinesManager(QWidget):
             self.list_widget.addItem(item)
 
         for cline in project_data.curve_lines:
-            n1 = name_map.get(cline.start_uid, "Unknown")
-            n2 = name_map.get(cline.end_uid, "Unknown")
+            n1 = mathtext_to_plain(name_map.get(cline.start_uid, "Unknown"))
+            n2 = mathtext_to_plain(name_map.get(cline.end_uid, "Unknown"))
             guide_count = len(cline.guide_points)
             guide_mark = f" ({guide_count}pt)" if guide_count else ""
             arrow_mark = " ▶" if cline.arrow.enabled else ""

@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QLabel,
                                QComboBox, QFormLayout, QRadioButton, QButtonGroup,
-                               QHBoxLayout, QTableWidgetItem, QHeaderView, QApplication)
+                               QHBoxLayout, QTableWidgetItem, QHeaderView, QApplication,
+                               QPushButton, QFrame)
 from ui.widgets.helpers import CopyableTableWidget
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QBrush
@@ -21,7 +22,7 @@ import math
 
 if TYPE_CHECKING:
     from delta.project_controller import ProjectController
-from ui.widgets.helpers import populate_combo, STYLE_MESSAGE_WARNING, STYLE_MESSAGE_ERROR, get_message_style
+from ui.widgets.helpers import populate_combo, STYLE_MESSAGE_WARNING, STYLE_MESSAGE_ERROR, get_message_style, mathtext_to_plain
 
 
 def _get_error_color() -> QColor:
@@ -40,6 +41,7 @@ def _get_normal_color() -> QColor:
 class AnalysisPanel(QWidget):
     update_needed = Signal()
     overlay_changed = Signal()
+    open_lever_mix_requested = Signal()
 
     def __init__(self, controller: 'ProjectController'):
         super().__init__()
@@ -178,21 +180,33 @@ class AnalysisPanel(QWidget):
         self.lbl_info.setStyleSheet(self._get_default_style())
         
         layout.addWidget(self.lbl_info)
-        layout.addStretch()
-        
+
         self._last_cursor_comp = Composition(a=0,b=0,c=0)
         self._on_source_changed()
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(sep)
+
+        btn_lever_mix = QPushButton("⚗ Lever Mix…")
+        btn_lever_mix.setToolTip(
+            "Create a new composition by mixing two end-members\n"
+            "according to the lever rule (specify mol%)."
+        )
+        btn_lever_mix.clicked.connect(self.open_lever_mix_requested)
+        layout.addWidget(btn_lever_mix)
+        layout.addStretch()
 
     def update_view(self):
         # Обновляем комбобоксы
         comp_combos = [
             self.cb_comp_a,
-            self.cb_comp_b, 
+            self.cb_comp_b,
             self.cb_comp_c,
-            self.cb_target_comp
+            self.cb_target_comp,
         ]
         self._populate_comp_combos(comp_combos)
-        
+
         # Обновляем заголовки таблицы (компоненты)
         comps = self._controller.get_components()
         self.table_manual.setHorizontalHeaderLabels(comps)
@@ -294,7 +308,7 @@ class AnalysisPanel(QWidget):
             populate_combo(
                 cb,
                 sorted_comps,
-                get_text=lambda p: p.name or "[Unnamed]",
+                get_text=lambda p: mathtext_to_plain(p.name) if p.name else "[Unnamed]",
                 get_data=lambda p: p.uid
             )
 
