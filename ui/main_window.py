@@ -237,6 +237,7 @@ class MainWindow(QMainWindow):
         self.table_widget.request_add_composition.connect(self._on_composition_added)
         self.table_widget.composition_edited.connect(self._on_comp_edited)
         self.table_widget.components_changed.connect(self._on_comps_changed)
+        self.table_widget.molar_masses_changed.connect(self._on_molar_masses_changed)
         self.table_widget.grid_changed.connect(self._on_grid_changed)
         self.table_widget.view_mode_changed.connect(self._on_view_changed)
         self.table_widget.aspect_lock_changed.connect(self._on_aspect_changed)
@@ -753,6 +754,14 @@ class MainWindow(QMainWindow):
     def _on_comps_changed(self, names: list[str]):
         self.controller.update_components(names=names)
         self.statusBar().showMessage("Component names updated", 3000)
+
+    def _on_molar_masses_changed(self, masses: list) -> None:
+        self.controller.update_component_molar_masses(masses)
+        n_set = sum(1 for m in masses if m is not None)
+        if n_set == 3:
+            self.statusBar().showMessage("Molar masses set — naveski calculation available", 3000)
+        elif n_set == 0:
+            self.statusBar().showMessage("Molar masses cleared", 2000)
 
     def _on_grid_changed(self, visible: bool, step: float):
         self.controller.update_grid(visible=visible, step=step)

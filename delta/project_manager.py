@@ -288,6 +288,11 @@ class ProjectManager:
             self._project.components = names
             self._notify_change(save_undo=False)
 
+    def update_component_molar_masses(self, masses: List[Optional[float]]) -> None:
+        if len(masses) == 3:
+            self._project.component_molar_masses = list(masses)
+            self._notify_change(save_undo=False)
+
     def update_grid(self, visible: bool, step: float) -> None:
         self._save_undo_before_change()                         # ◄ FIX
         self._project.grid.visible = visible

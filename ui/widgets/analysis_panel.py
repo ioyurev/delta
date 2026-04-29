@@ -1,10 +1,10 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QLabel,
                                QComboBox, QFormLayout, QRadioButton, QButtonGroup,
                                QHBoxLayout, QTableWidgetItem, QHeaderView, QApplication,
-                               QPushButton, QFrame)
+                               QPushButton, QFrame, QPlainTextEdit, QDoubleSpinBox)
 from ui.widgets.helpers import CopyableTableWidget
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QBrush
+from PySide6.QtGui import QColor, QBrush, QFont
 from delta.models import Composition, RenderOverlay, OverlayLine, NamedComposition, CompositionError
 from delta import math_utils
 from delta.exceptions import DegenerateBasisError, DegenerateTriangleError
@@ -22,7 +22,7 @@ import math
 
 if TYPE_CHECKING:
     from delta.project_controller import ProjectController
-from ui.widgets.helpers import populate_combo, STYLE_MESSAGE_WARNING, STYLE_MESSAGE_ERROR, get_message_style, mathtext_to_plain
+from ui.widgets.helpers import populate_combo, mathtext_to_plain
 
 
 def _get_error_color() -> QColor:
@@ -173,15 +173,34 @@ class AnalysisPanel(QWidget):
         layout.addWidget(gb_target)
         
         # --- 4. Result ---
-        self.lbl_info = QLabel("Result...")
-        self.lbl_info.setWordWrap(True)
-        self.lbl_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        
-        self.lbl_info.setStyleSheet(self._get_default_style())
-        
-        layout.addWidget(self.lbl_info)
+        h_mass = QHBoxLayout()
+        h_mass.addWidget(QLabel("Sample mass:"))
+        self.spin_total_mass = QDoubleSpinBox()
+        self.spin_total_mass.setRange(0.0001, 9999.9999)
+        self.spin_total_mass.setDecimals(4)
+        self.spin_total_mass.setSuffix(" g")
+        self.spin_total_mass.setValue(0.5)
+        self.spin_total_mass.setSingleStep(0.1)
+        self.spin_total_mass.setEnabled(False)
+        self.spin_total_mass.setToolTip(
+            "Set molar masses for A, B, C in Compositions → System Settings\n"
+            "to enable sample mass (naveski) calculation."
+        )
+        self.spin_total_mass.valueChanged.connect(self._on_calc_request)
+        h_mass.addWidget(self.spin_total_mass)
+        layout.addLayout(h_mass)
 
-        self._last_cursor_comp = Composition(a=0,b=0,c=0)
+        self.result_edit = QPlainTextEdit()
+        self.result_edit.setReadOnly(True)
+        mono = QFont("Courier New")
+        mono.setStyleHint(QFont.StyleHint.Monospace)
+        mono.setPointSize(9)
+        self.result_edit.setFont(mono)
+        self.result_edit.setMinimumHeight(160)
+        self.result_edit.setPlainText("Result...")
+        layout.addWidget(self.result_edit)
+
+        self._last_cursor_comp = Composition(a=0, b=0, c=0)
         self._on_source_changed()
 
         sep = QFrame()
@@ -197,8 +216,7 @@ class AnalysisPanel(QWidget):
         layout.addWidget(btn_lever_mix)
         layout.addStretch()
 
-    def update_view(self):
-        # Обновляем комбобоксы
+    def update_view(self) -> None:
         comp_combos = [
             self.cb_comp_a,
             self.cb_comp_b,
@@ -207,9 +225,19 @@ class AnalysisPanel(QWidget):
         ]
         self._populate_comp_combos(comp_combos)
 
-        # Обновляем заголовки таблицы (компоненты)
         comps = self._controller.get_components()
         self.table_manual.setHorizontalHeaderLabels(comps)
+
+        masses = self._controller.get_component_molar_masses()
+        all_set = all(m is not None for m in masses)
+        self.spin_total_mass.setEnabled(all_set)
+        if not all_set:
+            self.spin_total_mass.setToolTip(
+                "Set molar masses for A, B, C in Compositions → System Settings\n"
+                "to enable sample mass (naveski) calculation."
+            )
+        else:
+            self.spin_total_mass.setToolTip("Total sample mass for naveski calculation")
 
     def _on_manual_item_changed(self, item: QTableWidgetItem):
         """Логика валидации таблицы (1-в-1 как в CompositionsTable)"""
@@ -336,7 +364,7 @@ class AnalysisPanel(QWidget):
         if self.cb_target_source.currentIndex() == 0:
             self._calculate_and_display(comp)
 
-    def _on_calc_request(self, value: Optional[float] = None):
+    def _on_calc_request(self, value: Optional[float] = None) -> None:
         idx = self.cb_target_source.currentIndex()
         target_comp = None
         if idx == 0:
@@ -352,104 +380,198 @@ class AnalysisPanel(QWidget):
             c = self._get_manual_value(2)
             target_comp = Composition(a=a, b=b, c=c)
             if target_comp.total < EPSILON_ZERO:
-                self.lbl_info.setText("Invalid composition (Sum ≈ 0)")
-                self.lbl_info.setStyleSheet("color: red;")
+                self.result_edit.setPlainText("⚠ Invalid composition (Sum ≈ 0)")
                 return
                 
         if target_comp:
             self._calculate_and_display(target_comp)
             self._emit_update_req()
 
-    def _calculate_and_display(self, comp: Composition):
+    # =========================================================================
+    # HELPERS — FORMULA TEXT BUILDERS
+    # =========================================================================
+
+    def _fmt_name(self, name: str) -> str:
+        """Обрезает имя до 12 символов для выравнивания в моноширинном выводе."""
+        from ui.widgets.helpers import mathtext_to_plain
+        plain = mathtext_to_plain(name)
+        return plain[:12] if len(plain) > 12 else plain
+
+    def _molar_mass_formula(
+        self,
+        comp_name: str,
+        comp: 'Composition',
+        vertex_names: list[str],
+        vertex_masses: tuple[float, float, float],
+        M_val: float,
+    ) -> str:
+        """Строит строку 'M(name) = (a·M_A + b·M_B)·n = val g/mol'."""
+        a, b, c = comp.normalized
+        terms = []
+        for frac, v_mass in zip([a, b, c], vertex_masses):
+            if abs(frac) > 1e-9:
+                terms.append(f"{frac:.3f}·{v_mass:.2f}")
+        inner = " + ".join(terms)
+        n = comp.total
+        n_str = f"{n:.4g}"
+        short = self._fmt_name(comp_name)
+        return f"  M({short}) = ({inner})·{n_str}\n         = {M_val:.2f} g/mol"
+
+    def _naveski_block(
+        self,
+        names: list[str],
+        mol_fracs: list[float],
+        M_vals: list[float],
+        total_mass: float,
+    ) -> str:
+        """Строит блок расчёта навесок с подстановленными значениями."""
+        naveski = math_utils.calculate_naveski(
+            mol_fracs=mol_fracs,
+            molar_masses=M_vals,
+            total_mass_g=total_mass,
+        )
+        avg_M = math.fsum(x * M for x, M in zip(mol_fracs, M_vals))
+
+        avg_terms = " + ".join(
+            f"{x:.4f}·{M:.2f}"
+            for x, M in zip(mol_fracs, M_vals)
+            if x > 1e-9
+        )
+        lines = [
+            f"─── Sample mass [{total_mass:.4f} g] ─────",
+            f"  ⟨M⟩ = {avg_terms}",
+            f"       = {avg_M:.2f} g/mol",
+            "",
+        ]
+        total_check = 0.0
+        for name, x, M, m in zip(names, mol_fracs, M_vals, naveski):
+            total_check += m
+            short = self._fmt_name(name)
+            lines.append(
+                f"  m({short}) = {x:.4f}·{M:.2f} / {avg_M:.2f}"
+                f"\n           · {total_mass:.4f} = {m:.4f} g"
+            )
+        lines.append("  " + "─" * 33)
+        lines.append(f"  Total    = {total_check:.4f} g")
+        return "\n".join(lines)
+
+    # =========================================================================
+    # MAIN CALCULATION
+    # =========================================================================
+
+    def _calculate_and_display(self, comp: Composition) -> None:
         if comp.total < EPSILON_ZERO:
-            self.lbl_info.setText("Invalid composition (Sum ≈ 0)")
-            self.lbl_info.setStyleSheet("color: red;")
+            self.result_edit.setPlainText("⚠ Invalid composition (Sum ≈ 0)")
             return
 
         uid_a = self.cb_comp_a.currentData()
         uid_b = self.cb_comp_b.currentData()
         p_a = self._get_comp(uid_a)
         p_b = self._get_comp(uid_b)
-        
+
         if not p_a or not p_b:
             return
 
         is_mouse_source = (self.cb_target_source.currentIndex() == 0)
 
+        # Молярные массы вершин (None если не заданы)
+        raw_masses = self._controller.get_component_molar_masses()
+        has_masses = all(m is not None for m in raw_masses)
+        vertex_masses: tuple[float, float, float] | None = (
+            (float(raw_masses[0]), float(raw_masses[1]), float(raw_masses[2]))  # type: ignore[arg-type]
+            if has_masses else None
+        )
+        vertex_names = self._controller.get_components()
+
         try:
             # --- LINEAR MODE ---
             if self.rb_linear.isChecked():
                 if uid_a == uid_b:
-                    self.lbl_info.setText("Error: Basis compositions must be different.")
-                    self.lbl_info.setStyleSheet(self._get_default_style())
+                    self.result_edit.setPlainText("⚠ Basis compositions must be different.")
                     return
-                
+
                 if not is_mouse_source:
-                    if not math_utils.is_point_on_line(p_a.composition, p_b.composition, comp, tol=TOLERANCE_ON_LINE_STRICT):
-                        self.lbl_info.setText("Error: Point is NOT on the selected line.")
-                        self.lbl_info.setStyleSheet("color: #D8000C; background-color: #FFBABA; padding: 10px; border-radius: 4px;")
+                    if not math_utils.is_point_on_line(
+                        p_a.composition, p_b.composition, comp,
+                        tol=TOLERANCE_ON_LINE_STRICT,
+                    ):
+                        self.result_edit.setPlainText("⚠ Point is NOT on the selected line.")
                         return
 
                 try:
                     t = math_utils.get_lever_fraction(p_a.composition, p_b.composition, comp)
                 except DegenerateBasisError as e:
-                    self.lbl_info.setText(f"Error: {e.reason}")
-                    self.lbl_info.setStyleSheet("color: #D8000C; background-color: #FFBABA; padding: 10px; border-radius: 4px;")
+                    self.result_edit.setPlainText(f"⚠ {e.reason}")
                     return
-                
-                if t < -EPSILON_SEGMENT or t > (1.0 + EPSILON_SEGMENT):
-                    self.lbl_info.setText("Error: Point is OUTSIDE the segment.")
-                    self.lbl_info.setStyleSheet("color: #D8000C; background-color: #FFBABA; padding: 10px; border-radius: 4px;")
-                    return
-                else:
-                    self.lbl_info.setStyleSheet(self._get_default_style())
 
-                # Атомные доли вклада (позиция вдоль линии в пространстве атомных долей)
+                if t < -EPSILON_SEGMENT or t > (1.0 + EPSILON_SEGMENT):
+                    self.result_edit.setPlainText("⚠ Point is OUTSIDE the segment.")
+                    return
+
                 atom_a = 1.0 - t
                 atom_b = t
-
-                # Истинные молярные доли соединений с учётом числа атомов в ф.е.
                 n_a = p_a.composition.total
                 n_b = p_b.composition.total
-                mol_a, mol_b = math_utils.atom_fracs_to_mole_fracs([atom_a, atom_b], [n_a, n_b])
+                mol_a, mol_b = math_utils.atom_fracs_to_mole_fracs(
+                    [atom_a, atom_b], [n_a, n_b]
+                )
 
                 d = DISPLAY_DECIMALS_ANALYSIS
+                na = self._fmt_name(p_a.name)
+                nb = self._fmt_name(p_b.name)
+                W = max(len(na), len(nb))
                 res_text = (
                     f"Lever Rule (mol.%):\n"
-                    f"  {p_a.name:<10} : {mol_a*100:.{d}f}%\n"
-                    f"  {p_b.name:<10} : {mol_b*100:.{d}f}%\n"
-                    f"  {'─' * 20}\n"
-                    f"  {'Total':<10} : {(mol_a + mol_b)*100:.{d}f}%"
+                    f"  {na:<{W}} : {mol_a*100:.{d}f}%\n"
+                    f"  {nb:<{W}} : {mol_b*100:.{d}f}%\n"
+                    f"  {'─' * (W + 14)}\n"
+                    f"  {'Total':<{W}} : {(mol_a + mol_b)*100:.{d}f}%"
                 )
 
                 if not is_mouse_source:
                     ints = math_utils.find_integer_ratio([mol_a, mol_b])
                     if ints:
-                        res_text += (f"\n\nStoichiometry (molar ratio):\n"
-                                     f"  {p_a.name:<10} : {ints[0]}\n"
-                                     f"  {p_b.name:<10} : {ints[1]}")
-                
-                self.lbl_info.setText(res_text)
-                
+                        res_text += (
+                            f"\n\nStoichiometry (molar ratio):\n"
+                            f"  {na:<{W}} : {ints[0]}\n"
+                            f"  {nb:<{W}} : {ints[1]}"
+                        )
+
+                if vertex_masses is not None:
+                    M_a = math_utils.molar_mass_from_vertices(p_a.composition, vertex_masses)
+                    M_b = math_utils.molar_mass_from_vertices(p_b.composition, vertex_masses)
+                    res_text += (
+                        "\n\n─── Molar masses ─────────────────\n"
+                        + self._molar_mass_formula(p_a.name, p_a.composition, vertex_names, vertex_masses, M_a)
+                        + "\n"
+                        + self._molar_mass_formula(p_b.name, p_b.composition, vertex_names, vertex_masses, M_b)
+                        + "\n\n"
+                        + self._naveski_block(
+                            [p_a.name, p_b.name],
+                            [mol_a, mol_b],
+                            [M_a, M_b],
+                            self.spin_total_mass.value(),
+                        )
+                    )
+
+                self.result_edit.setPlainText(res_text)
+
             # --- TERNARY MODE ---
             else:
                 uid_c = self.cb_comp_c.currentData()
                 p_c = self._get_comp(uid_c)
-                
+
                 if not p_c or len({uid_a, uid_b, uid_c}) < 3:
-                    self.lbl_info.setText("Error: Select 3 distinct compositions.")
-                    self.lbl_info.setStyleSheet(STYLE_MESSAGE_ERROR)
+                    self.result_edit.setPlainText("⚠ Select 3 distinct compositions.")
                     return
-                
-                # Проверка коллинеарности перед расчётом
+
                 if math_utils.are_compositions_collinear(
                     p_a.composition, p_b.composition, p_c.composition
                 ):
-                    self.lbl_info.setText(
-                        "Error: Compositions are collinear.\n"
+                    self.result_edit.setPlainText(
+                        "⚠ Compositions are collinear.\n"
                         "Cannot calculate fractions for degenerate triangle."
                     )
-                    self.lbl_info.setStyleSheet(STYLE_MESSAGE_ERROR)
                     return
 
                 is_inv = self._controller.is_inverted()
@@ -460,35 +582,31 @@ class AnalysisPanel(QWidget):
                     pt_c = math_utils.bary_to_cart(p_c.composition, is_inv)
                     pt_t = math_utils.bary_to_cart(comp, is_inv)
                 except CompositionError:
-                    self.lbl_info.setText("Error: One of the basis compositions is invalid (sum=0).")
+                    self.result_edit.setPlainText(
+                        "⚠ One of the basis compositions is invalid (sum=0)."
+                    )
                     return
 
                 try:
                     u, v, w = math_utils.get_barycentric_from_cartesian(
-                        float(pt_a[0]), float(pt_a[1]), 
-                        float(pt_b[0]), float(pt_b[1]), 
-                        float(pt_c[0]), float(pt_c[1]), 
-                        float(pt_t[0]), float(pt_t[1])
+                        float(pt_a[0]), float(pt_a[1]),
+                        float(pt_b[0]), float(pt_b[1]),
+                        float(pt_c[0]), float(pt_c[1]),
+                        float(pt_t[0]), float(pt_t[1]),
                     )
                 except DegenerateTriangleError as e:
-                    self.lbl_info.setText(f"Error: {e.reason}")
-                    self.lbl_info.setStyleSheet("color: #D8000C; background-color: #FFBABA; padding: 10px; border-radius: 4px;")
+                    self.result_edit.setPlainText(f"⚠ {e.reason}")
                     return
-                
+
                 is_inside = (
-                    -EPSILON_SEGMENT <= u <= 1.0 + EPSILON_SEGMENT and
-                    -EPSILON_SEGMENT <= v <= 1.0 + EPSILON_SEGMENT and
-                    -EPSILON_SEGMENT <= w <= 1.0 + EPSILON_SEGMENT
+                    -EPSILON_SEGMENT <= u <= 1.0 + EPSILON_SEGMENT
+                    and -EPSILON_SEGMENT <= v <= 1.0 + EPSILON_SEGMENT
+                    and -EPSILON_SEGMENT <= w <= 1.0 + EPSILON_SEGMENT
                 )
-
                 if not is_inside:
-                    self.lbl_info.setText("Point is OUTSIDE the selected triangle.")
-                    self.lbl_info.setStyleSheet("color: #D8000C; background-color: #FFBABA; padding: 10px; border-radius: 4px;")
+                    self.result_edit.setPlainText("⚠ Point is OUTSIDE the selected triangle.")
                     return
-                
-                self.lbl_info.setStyleSheet(self._get_default_style())
 
-                # Истинные молярные доли с учётом числа атомов в формульной единице
                 n_a = p_a.composition.total
                 n_b = p_b.composition.total
                 n_c = p_c.composition.total
@@ -497,29 +615,55 @@ class AnalysisPanel(QWidget):
                 )
 
                 d = DISPLAY_DECIMALS_ANALYSIS
+                na = self._fmt_name(p_a.name)
+                nb = self._fmt_name(p_b.name)
+                nc = self._fmt_name(p_c.name)
+                W = max(len(na), len(nb), len(nc))
                 total = mol_a + mol_b + mol_c
                 res_text = (
                     f"Basis Fractions (mol.%):\n"
-                    f"  {p_a.name:<10} : {mol_a*100:.{d}f}%\n"
-                    f"  {p_b.name:<10} : {mol_b*100:.{d}f}%\n"
-                    f"  {p_c.name:<10} : {mol_c*100:.{d}f}%\n"
-                    f"  {'─' * 20}\n"
-                    f"  {'Total':<10} : {total*100:.{d}f}%"
+                    f"  {na:<{W}} : {mol_a*100:.{d}f}%\n"
+                    f"  {nb:<{W}} : {mol_b*100:.{d}f}%\n"
+                    f"  {nc:<{W}} : {mol_c*100:.{d}f}%\n"
+                    f"  {'─' * (W + 14)}\n"
+                    f"  {'Total':<{W}} : {total*100:.{d}f}%"
                 )
 
                 if not is_mouse_source:
                     ints = math_utils.find_integer_ratio([mol_a, mol_b, mol_c])
                     if ints:
-                        res_text += (f"\n\nStoichiometry (molar ratio):\n"
-                                     f"  {p_a.name:<10} : {ints[0]}\n"
-                                     f"  {p_b.name:<10} : {ints[1]}\n"
-                                     f"  {p_c.name:<10} : {ints[2]}")
-                
-                self.lbl_info.setText(res_text)
+                        res_text += (
+                            f"\n\nStoichiometry (molar ratio):\n"
+                            f"  {na:<{W}} : {ints[0]}\n"
+                            f"  {nb:<{W}} : {ints[1]}\n"
+                            f"  {nc:<{W}} : {ints[2]}"
+                        )
 
-        except (CompositionError, ValueError, ZeroDivisionError, DegenerateBasisError, DegenerateTriangleError) as e:
-            self.lbl_info.setText(f"Calculation Error: {str(e)}")
-            self.lbl_info.setStyleSheet("color: #D8000C; background-color: #FFBABA; padding: 10px; border-radius: 4px;")
+                if vertex_masses is not None:
+                    M_a = math_utils.molar_mass_from_vertices(p_a.composition, vertex_masses)
+                    M_b = math_utils.molar_mass_from_vertices(p_b.composition, vertex_masses)
+                    M_c = math_utils.molar_mass_from_vertices(p_c.composition, vertex_masses)
+                    res_text += (
+                        "\n\n─── Molar masses ─────────────────\n"
+                        + self._molar_mass_formula(p_a.name, p_a.composition, vertex_names, vertex_masses, M_a)
+                        + "\n"
+                        + self._molar_mass_formula(p_b.name, p_b.composition, vertex_names, vertex_masses, M_b)
+                        + "\n"
+                        + self._molar_mass_formula(p_c.name, p_c.composition, vertex_names, vertex_masses, M_c)
+                        + "\n\n"
+                        + self._naveski_block(
+                            [p_a.name, p_b.name, p_c.name],
+                            [mol_a, mol_b, mol_c],
+                            [M_a, M_b, M_c],
+                            self.spin_total_mass.value(),
+                        )
+                    )
+
+                self.result_edit.setPlainText(res_text)
+
+        except (CompositionError, ValueError, ZeroDivisionError,
+                DegenerateBasisError, DegenerateTriangleError) as e:
+            self.result_edit.setPlainText(f"⚠ Calculation error: {e}")
 
     def get_overlay_data(self) -> RenderOverlay:
         overlay = RenderOverlay()
@@ -635,16 +779,12 @@ class AnalysisPanel(QWidget):
         
         return True, ""
 
-    def _validate_ternary_basis(self):
-        """Проверяет и показывает статус базиса для Ternary режима"""
+    def _validate_ternary_basis(self) -> None:
         is_valid, message = self._check_ternary_basis_validity()
-        
         if not is_valid:
-            self.lbl_info.setText(f"⚠ {message}")
-            self.lbl_info.setStyleSheet(STYLE_MESSAGE_WARNING)
-        elif message:  # Warning (маленький треугольник)
-            self.lbl_info.setText(message)
-            self.lbl_info.setStyleSheet(STYLE_MESSAGE_WARNING)
+            self.result_edit.setPlainText(f"⚠ {message}")
+        elif message:
+            self.result_edit.setPlainText(f"⚠ {message}")
 
     def _on_basis_changed(self):
         """Обработчик изменения базисных точек"""
@@ -653,10 +793,6 @@ class AnalysisPanel(QWidget):
             self._validate_ternary_basis()
         
         self._on_calc_request()
-
-    def _get_default_style(self) -> str:
-        """Возвращает адаптивный стиль для основного окна результатов"""
-        return get_message_style("default")
 
     def _emit_update_req(self):
         self.update_needed.emit()

@@ -1,7 +1,8 @@
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
-                               QLabel, QLineEdit, QPushButton, QCheckBox, 
-                               QDoubleSpinBox, QTableWidgetItem, QHeaderView, 
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
+                               QLabel, QLineEdit, QPushButton, QCheckBox,
+                               QDoubleSpinBox, QTableWidgetItem, QHeaderView,
                                QMenu)
+from typing import Optional
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QAction, QBrush, QKeyEvent
 from delta.models import ProjectData, CompositionUpdate, Composition
@@ -20,11 +21,12 @@ _COLUMN_TO_FIELD = {1: 'a', 2: 'b', 3: 'c'}
 
 
 class CompositionsTable(QWidget):
-    composition_edited = Signal(str, CompositionUpdate) 
+    composition_edited = Signal(str, CompositionUpdate)
     request_add_composition = Signal()
-    request_edit_style = Signal(str) 
+    request_edit_style = Signal(str)
     request_delete_composition = Signal(str)
     components_changed = Signal(list)
+    molar_masses_changed = Signal(list)
     grid_changed = Signal(bool, float)
     view_mode_changed = Signal(bool)
     aspect_lock_changed = Signal(bool)
@@ -67,7 +69,42 @@ class CompositionsTable(QWidget):
         h_comp.addWidget(self.ed_b)
         h_comp.addWidget(self.ed_c)
         sys_lay.addLayout(h_comp)
-        
+
+        # Molar masses
+        h_mass = QHBoxLayout()
+        self._sp_m_a = self._make_mass_spin()
+        self._sp_m_b = self._make_mass_spin()
+        self._sp_m_c = self._make_mass_spin()
+        self._sp_m_a.setToolTip(
+            "Molar mass of component A [g/mol]\n"
+            "Used in Analysis panel for naveski calculation.\n"
+            "Leave at — (0) to disable."
+        )
+        self._sp_m_b.setToolTip(
+            "Molar mass of component B [g/mol]\n"
+            "Used in Analysis panel for naveski calculation.\n"
+            "Leave at — (0) to disable."
+        )
+        self._sp_m_c.setToolTip(
+            "Molar mass of component C [g/mol]\n"
+            "Used in Analysis panel for naveski calculation.\n"
+            "Leave at — (0) to disable."
+        )
+
+        self._mass_timer = QTimer()
+        self._mass_timer.setSingleShot(True)
+        self._mass_timer.setInterval(300)
+        self._mass_timer.timeout.connect(self._on_molar_masses_update)
+        self._sp_m_a.valueChanged.connect(self._mass_timer.start)
+        self._sp_m_b.valueChanged.connect(self._mass_timer.start)
+        self._sp_m_c.valueChanged.connect(self._mass_timer.start)
+
+        h_mass.addWidget(QLabel("M (g/mol):"))
+        h_mass.addWidget(self._sp_m_a)
+        h_mass.addWidget(self._sp_m_b)
+        h_mass.addWidget(self._sp_m_c)
+        sys_lay.addLayout(h_mass)
+
          # View & Grid
         h_sets = QHBoxLayout()
         self.chk_inv = QCheckBox("Inverted")
@@ -203,10 +240,37 @@ class CompositionsTable(QWidget):
         
         return False, "Values are normalized (sum ≈ 1)"
 
+    @staticmethod
+    def _make_mass_spin() -> QDoubleSpinBox:
+        sp = QDoubleSpinBox()
+        sp.setRange(0.0, 99999.99)
+        sp.setDecimals(2)
+        sp.setSingleStep(1.0)
+        sp.setSpecialValueText("—")
+        sp.setValue(0.0)
+        return sp
+
+    def _on_molar_masses_update(self) -> None:
+        def to_opt(sp: QDoubleSpinBox) -> Optional[float]:
+            return None if sp.value() == 0.0 else sp.value()
+        self.molar_masses_changed.emit([
+            to_opt(self._sp_m_a),
+            to_opt(self._sp_m_b),
+            to_opt(self._sp_m_c),
+        ])
+
     def update_view(self, project_data: ProjectData) -> None:
         self.ed_a.setText(project_data.components[0])
         self.ed_b.setText(project_data.components[1])
         self.ed_c.setText(project_data.components[2])
+
+        for sp, m in zip(
+            [self._sp_m_a, self._sp_m_b, self._sp_m_c],
+            project_data.component_molar_masses,
+        ):
+            sp.blockSignals(True)
+            sp.setValue(m if m is not None else 0.0)
+            sp.blockSignals(False)
         
         self.chk_inv.blockSignals(True)
         self.chk_inv.setChecked(project_data.is_inverted)

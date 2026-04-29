@@ -663,6 +663,48 @@ def fit_curve_through_points(
     return pts[:, 0], pts[:, 1]
 
 
+def molar_mass_from_vertices(
+    comp: Composition,
+    vertex_masses: tuple[float, float, float],
+) -> float:
+    """
+    M = (a·M_A + b·M_B + c·M_C) · total
+
+    Корректно различает Gd₂S₃ (total=5) и GdS₁.₅ (total=2.5):
+    нормированные координаты одинаковы, но total разный.
+    """
+    a, b, c = comp.normalized
+    M_A, M_B, M_C = vertex_masses
+    return (a * M_A + b * M_B + c * M_C) * comp.total
+
+
+def calculate_naveski(
+    *,
+    mol_fracs: List[float],
+    molar_masses: List[float],
+    total_mass_g: float,
+) -> List[float]:
+    """
+    m_i = x_i · M_i / ⟨M⟩ · m_total,  где  ⟨M⟩ = Σ x_j · M_j
+
+    Args:
+        mol_fracs:    молярные доли компонентов (сумма ≈ 1)
+        molar_masses: молярные массы компонентов [г/моль]
+        total_mass_g: желаемая масса образца [г]
+
+    Returns:
+        Навески [г] для каждого компонента.
+
+    Raises:
+        ValueError: если средняя молярная масса ≈ 0.
+    """
+    contribs = [x * M for x, M in zip(mol_fracs, molar_masses)]
+    avg_M = math.fsum(contribs)
+    if avg_M < EPSILON_ZERO:
+        raise ValueError("Average molar mass is zero — check component molar masses")
+    return [c / avg_M * total_mass_g for c in contribs]
+
+
 def get_triangle_area(p1: Composition, p2: Composition, p3: Composition) -> float:
     """
     Вычисляет площадь треугольника в барицентрических координатах.

@@ -171,6 +171,12 @@ class ProjectController(QObject):
     def update_components(self, names: List[str]) -> None:
         self._manager.update_components(names)
 
+    def update_component_molar_masses(self, masses: List[Optional[float]]) -> None:
+        self._manager.update_component_molar_masses(masses)
+
+    def get_component_molar_masses(self) -> List[Optional[float]]:
+        return list(self._manager.project_data.component_molar_masses)
+
     def update_grid(self, visible: bool, step: float) -> None:
         self._manager.update_grid(visible, step)
 

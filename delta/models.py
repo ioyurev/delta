@@ -351,6 +351,9 @@ class ProjectData(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
     components: List[str] = Field(default_factory=lambda: ["A", "B", "C"])
+    component_molar_masses: List[Optional[float]] = Field(
+        default_factory=lambda: [None, None, None]  # type: ignore[arg-type]
+    )
     compositions: List[NamedComposition] = Field(default_factory=list)
     lines: List[TieLine] = Field(default_factory=list)
     curve_lines: List[CurveLine] = Field(default_factory=list)
