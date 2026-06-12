@@ -42,6 +42,7 @@ class ProjectRenderer:
         project: ProjectData,
         highlight_uids: list[str] | None = None,
         highlight_comp_uids: list[str] | None = None,
+        show_hints: bool = True,
     ) -> None:
         """Полная перерисовка проекта"""
         self.clear()
@@ -193,10 +194,11 @@ class ProjectRenderer:
         # 5. Вершины
         self._draw_vertices(project)
         
-        # 6. Подсказка при пустом проекте
-        user_compositions = [c for c in project.compositions if c.style.show_marker or c.style.show_label]
-        if not user_compositions and not project.lines:
-            self._draw_empty_state_hint()
+        # 6. Подсказка при пустом проекте (только в GUI-режиме)
+        if show_hints:
+            user_compositions = [c for c in project.compositions if c.style.show_marker or c.style.show_label]
+            if not user_compositions and not project.lines:
+                self._draw_empty_state_hint()
         
         # 7. Подсветка
         if highlight_uids:

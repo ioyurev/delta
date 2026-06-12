@@ -37,7 +37,7 @@ def render_to_file(
     
     # Используем существующий Renderer
     renderer = ProjectRenderer(ax)
-    renderer.draw_static_project(project_data)
+    renderer.draw_static_project(project_data, show_hints=False)
     
     if overlay:
         renderer.draw_dynamic_overlay(overlay, project_data.is_inverted)
@@ -82,7 +82,7 @@ def render_to_bytes(
     ax = fig.add_subplot(111)
     
     renderer = ProjectRenderer(ax)
-    renderer.draw_static_project(project_data)
+    renderer.draw_static_project(project_data, show_hints=False)
     
     apply_figure_margins(fig, project_data)
     fig.savefig(buffer, format=format, dpi=kwargs.get('dpi', 150), bbox_inches='tight')

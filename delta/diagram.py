@@ -229,7 +229,7 @@ class Diagram:
             interactive: Подключить интерактивность (координаты, drag меток)
         """
         renderer = ProjectRenderer(ax)
-        renderer.draw_static_project(self._manager.project_data)
+        renderer.draw_static_project(self._manager.project_data, show_hints=False)
 
         if hide_axes:
             ax.set_axis_off()
