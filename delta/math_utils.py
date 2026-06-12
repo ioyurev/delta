@@ -1,9 +1,13 @@
 import numpy as np
+import numpy.typing as npt
 import math
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, cast, TypeAlias
 from fractions import Fraction
 from math import gcd
 from functools import reduce
+from scipy.interpolate import splprep, splev
+
+
 from delta.models import Composition, CompositionError
 from delta.exceptions import DegenerateBasisError, DegenerateTriangleError
 from delta.constants import (
@@ -14,7 +18,14 @@ from delta.constants import (
     TOLERANCE_ON_LINE_STRICT,
 )
 from delta.constants import TRIANGLE_HEIGHT as H
-from loguru import logger
+
+
+SplineTck2D: TypeAlias = tuple[
+    npt.NDArray[np.float64],          # knots
+    list[npt.NDArray[np.float64]],    # coeffs for x/y
+    int,                              # degree
+]
+
 
 def _check_finite(value: float, name: str) -> None:
     """
@@ -50,11 +61,11 @@ def bary_to_cart(comp: Composition, is_inverted: bool) -> np.ndarray:
     return a * v_a + b * v_b + c * v_c
 
 def _clamp_barycentric(val: float) -> float:
-    """Очищает микро-шум (например -1e-17 -> 0.0)"""
+    """Очищает микро-шум вблизи 0.0 и 1.0."""
     if abs(val) < EPSILON_ZERO:
         return 0.0
-    # Опционально: можно прижимать 1.00000000000001 к 1.0, 
-    # но normalize() это и так сделает. Главное убрать отрицательные нули.
+    if abs(val - 1.0) < EPSILON_ZERO:
+        return 1.0
     return val
 
 def cart_to_bary(x: float, y: float, is_inverted: bool) -> Composition:
@@ -132,7 +143,6 @@ def solve_intersection(p1_comp: Composition, p2_comp: Composition,
     denom = R[0] * S[1] - R[1] * S[0]
     
     if abs(denom) < EPSILON_ZERO:
-        logger.warning("Intersection solver: Lines are parallel (denom ~ 0)")
         return None
         
     # Числитель для параметра t (пересечение относительно отрезка AB)
@@ -591,39 +601,94 @@ def fit_curve_through_points(
     end: np.ndarray,
     n_samples: int = 300,
     poly_degree: int = 3,
+    curve_mode: str = "spline",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Строит параметрическую кривую с жёсткими endpoint-ограничениями.
-
-    P(t) = (1-t)*start + t*end + t*(1-t)*Q(t)
-
-    Где Q — полином степени (poly_degree - 2), подбираемый методом
-    наименьших квадратов по guide_pts. Endpoints (t=0, t=1) проходятся
-    ТОЧНО — без отклонений. Guide-точки АППРОКСИМИРУЮТСЯ.
-
+    Строит параметрическую кривую через start, guide_pts и end.
+    
     Args:
-        start:       Начальная точка (декартовы), t=0, проходится точно.
-        guide_pts:   Промежуточные guide-точки — аппроксимируются (не интерполируются).
-        end:         Конечная точка (декартовы), t=1, проходится точно.
-        n_samples:   Число точек в выходном массиве (для ax.plot).
-        poly_degree: Степень полинома (2=квадратичный, 3=кубический, …, 5=5-й степени).
-
-    Returns:
-        (xs, ys) — массивы NumPy длиной n_samples.
+        curve_mode: "spline" — B-сплайн (scipy, интерполяция, без осцилляций)
+                    "polynomial" — глобальный полином (МНК-аппроксимация)
+        poly_degree: степень сплайна (1–3) или полинома (2–5)
     """
     p0 = np.asarray(start, dtype=float)
     p1 = np.asarray(end, dtype=float)
-    t_eval = np.linspace(0.0, 1.0, n_samples)
 
     if not guide_pts:
-        # Нет guide-точек → прямая линия
+        t_eval = np.linspace(0.0, 1.0, n_samples)
         xs = (1.0 - t_eval) * p0[0] + t_eval * p1[0]
         ys = (1.0 - t_eval) * p0[1] + t_eval * p1[1]
         return xs, ys
 
-    # Arc-length параметризация: t[i] = нормализованная длина дуги от start
-    guide_arr = np.array(guide_pts, dtype=float)          # (N, 2)
+    if curve_mode == "polynomial":
+        return _fit_polynomial(p0, guide_pts, p1, n_samples, poly_degree)
+    else:
+        return _fit_spline(p0, guide_pts, p1, n_samples, poly_degree)
+
+
+def _fit_spline(
+    p0: np.ndarray,
+    guide_pts: List[np.ndarray],
+    p1: np.ndarray,
+    n_samples: int,
+    degree: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """B-сплайн интерполяция (scipy). Проходит строго через все точки."""
+    guide_arr = np.array(guide_pts, dtype=float)
     all_pts = np.vstack([p0[np.newaxis], guide_arr, p1[np.newaxis]])
+
+    x = all_pts[:, 0]
+    y = all_pts[:, 1]
+
+    # Удаляем совпадающие подряд точки
+    diffs = np.diff(all_pts, axis=0)
+    seg_lens = np.sqrt((diffs ** 2).sum(axis=1))
+    valid_mask = np.ones(len(all_pts), dtype=bool)
+    valid_mask[1:] = seg_lens > EPSILON_ZERO
+    valid_mask[0] = True
+    valid_mask[-1] = True
+
+    x = x[valid_mask]
+    y = y[valid_mask]
+
+    num_points = len(x)
+    if num_points < 2:
+        return np.full(n_samples, p0[0]), np.full(n_samples, p0[1])
+    if num_points == 2:
+        t = np.linspace(0.0, 1.0, n_samples)
+        return (1.0 - t) * x[0] + t * x[1], (1.0 - t) * y[0] + t * y[1]
+
+    k = min(degree, 3, num_points - 1)
+
+    try:
+        tck_raw, _u = splprep([x, y], s=0, k=k)
+        tck = cast(SplineTck2D, tck_raw)
+
+        u_new = np.linspace(0.0, 1.0, n_samples)
+        xy_new = cast(list[npt.NDArray[np.float64]], splev(u_new, tck))
+        x_new, y_new = xy_new
+        return x_new, y_new
+    except (ValueError, np.linalg.LinAlgError):
+        t = np.linspace(0.0, 1.0, n_samples)
+        return (1.0 - t) * p0[0] + t * p1[0], (1.0 - t) * p0[1] + t * p1[1]
+
+
+def _fit_polynomial(
+    p0: np.ndarray,
+    guide_pts: List[np.ndarray],
+    p1: np.ndarray,
+    n_samples: int,
+    poly_degree: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Полиномиальная аппроксимация (МНК).
+    P(t) = (1-t)*start + t*end + t*(1-t)*Q(t)
+    Guide-точки аппроксимируются (не интерполируются).
+    """
+    t_eval = np.linspace(0.0, 1.0, n_samples)
+    guide_arr = np.array(guide_pts, dtype=float)
+    all_pts = np.vstack([p0[np.newaxis], guide_arr, p1[np.newaxis]])
+
     diffs = np.diff(all_pts, axis=0)
     seg_lens = np.sqrt((diffs ** 2).sum(axis=1))
     t_all = np.zeros(len(all_pts))
@@ -631,30 +696,23 @@ def fit_curve_through_points(
     total = t_all[-1]
 
     if total < EPSILON_ZERO:
-        # Все точки практически совпадают
-        xs = np.full(n_samples, p0[0])
-        ys = np.full(n_samples, p0[1])
-        return xs, ys
+        return np.full(n_samples, p0[0]), np.full(n_samples, p0[1])
 
-    t_all /= total              # t_all[0]=0, t_all[-1]=1
-    t_g = t_all[1:-1]           # t-значения guide-точек
+    t_all /= total
+    t_g = t_all[1:-1]
 
-    # Остатки: guide - линейная интерполяция между p0 и p1
-    linear_g = np.outer(1.0 - t_g, p0) + np.outer(t_g, p1)  # (N, 2)
-    residuals = guide_arr - linear_g                           # (N, 2)
+    linear_g = np.outer(1.0 - t_g, p0) + np.outer(t_g, p1)
+    residuals = guide_arr - linear_g
 
-    # Матрица системы: A[i,k] = t_i*(1-t_i) * t_i^k  для k=0..q_degree
     q_degree = max(0, poly_degree - 2)
     N = len(t_g)
     A = np.zeros((N, q_degree + 1))
     for k in range(q_degree + 1):
         A[:, k] = t_g * (1.0 - t_g) * (t_g ** k)
 
-    # МНК: A @ coefs ≈ residuals  →  coefs shape (q_degree+1, 2)
     coefs, _, _, _ = np.linalg.lstsq(A, residuals, rcond=None)
 
-    # Вычисляем P(t) в n_samples точках
-    linear_eval = np.outer(1.0 - t_eval, p0) + np.outer(t_eval, p1)  # (n, 2)
+    linear_eval = np.outer(1.0 - t_eval, p0) + np.outer(t_eval, p1)
     Q_eval = np.zeros((n_samples, 2))
     for k in range(q_degree + 1):
         Q_eval += np.outer(t_eval * (1.0 - t_eval) * (t_eval ** k), coefs[k])

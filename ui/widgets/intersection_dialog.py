@@ -18,12 +18,6 @@ class IntersectionDialog(QDialog):
         intersection_found(Composition): Испускается при добавлении точки пересечения
     """
     
-    # Стили результатов
-    _STYLE_SUCCESS = "color: green; font-weight: bold; background: #e0f0e0; padding: 10px; border-radius: 4px;"
-    _STYLE_WARNING = "color: orange; font-weight: bold; background: #fff0e0; padding: 10px; border-radius: 4px;"
-    _STYLE_ERROR = "color: red; font-weight: bold; background: #ffe0e0; padding: 10px; border-radius: 4px;"
-    _STYLE_DEFAULT = "font-weight: bold; padding: 10px; background: #f0f0f0; border-radius: 4px;"
-    
     overlay_changed = Signal(RenderOverlay)
     intersection_found = Signal(Composition)
     
@@ -131,12 +125,12 @@ class IntersectionDialog(QDialog):
         
         # Валидация на уровне UI
         if not uid1 or not uid2:
-            self._show_result("Select two lines.", self._STYLE_DEFAULT)
+            self._show_result("Select two lines.", get_message_style("default"))
             self._emit_overlay(RenderOverlay())
             return
         
         if uid1 == uid2:
-            self._show_result("Select two different lines.", self._STYLE_DEFAULT)
+            self._show_result("Select two different lines.", get_message_style("default"))
             self._emit_overlay(RenderOverlay())
             return
         
@@ -144,7 +138,7 @@ class IntersectionDialog(QDialog):
         try:
             result = self._controller.calculate_intersection(uid1, uid2)
         except (EntityNotFoundError, ValidationError) as e:
-            self._show_result(f"Error: {e}", self._STYLE_ERROR)
+            self._show_result(f"Error: {e}", get_message_style("error"))
             self._emit_overlay(RenderOverlay())
             return
         
@@ -209,7 +203,7 @@ class IntersectionDialog(QDialog):
             comp = result.intersection
             # Проверка на None перед доступом к атрибутам
             if comp is None:
-                self._show_result("Intersection found but somehow composition is None.", self._STYLE_ERROR)
+                self._show_result("Intersection found but somehow composition is None.", get_message_style("error"))
                 return
                 
             names = self._controller.get_components()
@@ -232,18 +226,18 @@ class IntersectionDialog(QDialog):
                     f"{names[1]} = {comp.b:.{d}f}\n"
                     f"{names[2]} = {comp.c:.{d}f}"
                 )
-            self._show_result(message, self._STYLE_SUCCESS)
+            self._show_result(message, get_message_style("success"))
             self.found_intersection = comp
             self.btn_add.setEnabled(True)
             
         elif result.status == IntersectionStatus.OUTSIDE:
-            self._show_result("Intersection is outside the triangle.", self._STYLE_WARNING)
+            self._show_result("Intersection is outside the triangle.", get_message_style("warning"))
             
         elif result.status == IntersectionStatus.PARALLEL:
-            self._show_result("Lines are parallel.", self._STYLE_ERROR)
+            self._show_result("Lines are parallel.", get_message_style("error"))
             
         else:
-            self._show_result("Invalid input.", self._STYLE_DEFAULT)
+            self._show_result("Invalid input.", get_message_style("default"))
 
     def _show_result(self, message: str, style: str):
         """Устанавливает текст и стиль результата"""

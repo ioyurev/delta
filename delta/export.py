@@ -8,6 +8,7 @@ from matplotlib.figure import Figure
 
 from delta.models import ProjectData, RenderOverlay
 from delta.renderer import ProjectRenderer
+from delta.render_layout import apply_figure_margins
 
 
 def render_to_file(
@@ -41,8 +42,7 @@ def render_to_file(
     if overlay:
         renderer.draw_dynamic_overlay(overlay, project_data.is_inverted)
     
-    # Настройка макета
-    fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+    apply_figure_margins(fig, project_data)
     
     # Сохранение
     fig.savefig(
@@ -84,7 +84,7 @@ def render_to_bytes(
     renderer = ProjectRenderer(ax)
     renderer.draw_static_project(project_data)
     
-    fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+    apply_figure_margins(fig, project_data)
     fig.savefig(buffer, format=format, dpi=kwargs.get('dpi', 150), bbox_inches='tight')
     
     import matplotlib.pyplot as plt

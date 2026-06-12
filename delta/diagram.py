@@ -18,8 +18,16 @@ from typing import Optional, Literal
 from dataclasses import dataclass
 
 from delta.project_manager import ProjectManager
-from delta.models import StyleUpdate, CompositionUpdate, IntersectionStatus
+from delta.models import (
+    StyleUpdate, CompositionUpdate, IntersectionStatus, FigureMargins,
+    StraightSegment, LineRefSegment, CurveRefSegment, BoundarySegment,
+    Composition as _Composition,
+)
+from delta.renderer import ProjectRenderer
+from delta.render_layout import apply_figure_margins
+from delta.interactive import MapInteractor
 from delta.exceptions import ValidationError, EntityNotFoundError
+from pydantic import ValidationError as PydanticValidationError
 
 
 # Типы для аннотаций
@@ -155,6 +163,131 @@ class Diagram:
     def grid_step(self, value: float) -> None:
         visible = self._manager.project_data.grid.visible
         self._manager.update_grid(visible, value)
+    
+    @property
+    def lock_aspect(self) -> bool:
+        """Фиксация пропорций осей."""
+        return self._manager.project_data.render_settings.lock_aspect
+
+    @lock_aspect.setter
+    def lock_aspect(self, value: bool) -> None:
+        self._manager.update_render_settings(lock_aspect=value)
+
+    @property
+    def figure_margins(self) -> list[float]:
+        """Отступы figure: [left, right, top, bottom]."""
+        m = self._manager.project_data.render_settings.figure_margins
+        return [m.left, m.right, m.top, m.bottom]
+
+    @figure_margins.setter
+    def figure_margins(self, value: list[float]) -> None:
+        if len(value) != 4:
+            raise ValueError(
+                "figure_margins must contain exactly 4 values: "
+                "[left, right, top, bottom]"
+            )
+
+        try:
+            margins = FigureMargins(
+                left=float(value[0]),
+                right=float(value[1]),
+                top=float(value[2]),
+                bottom=float(value[3]),
+            )
+        except PydanticValidationError as e:
+            raise ValueError(str(e)) from e
+
+        self._manager.update_render_settings(figure_margins=margins)
+
+    @property
+    def display_region_padding(self) -> float:
+        """Отступ вокруг области отображения (Display Region)."""
+        return self._manager.project_data.render_settings.display_region_padding
+
+    @display_region_padding.setter
+    def display_region_padding(self, value: float) -> None:
+        try:
+            self._manager.update_render_settings(display_region_padding=float(value))
+        except PydanticValidationError as e:
+            raise ValueError(str(e)) from e
+
+    def draw(
+        self,
+        ax,
+        *,
+        hide_axes: bool = True,
+        apply_margins: bool = True,
+        interactive: bool = False,
+    ) -> None:
+        """
+        Отрисовывает диаграмму на переданных осях matplotlib.
+
+        Args:
+            ax: Объект matplotlib.axes.Axes
+            hide_axes: Скрыть рамку осей (по умолчанию True)
+            apply_margins: Применить отступы figure_margins к фигуре (по умолчанию True)
+            interactive: Подключить интерактивность (координаты, drag меток)
+        """
+        renderer = ProjectRenderer(ax)
+        renderer.draw_static_project(self._manager.project_data)
+
+        if hide_axes:
+            ax.set_axis_off()
+
+        if apply_margins:
+            fig = ax.get_figure()
+            if fig:
+                apply_figure_margins(fig, self._manager.project_data)
+
+        if interactive:
+            # Сохраняем ссылку, чтобы GC не собрал интерактор
+            self._interactor = MapInteractor(
+                ax, self._manager.project_data, manager=self._manager
+            )
+
+    def show(
+        self,
+        *,
+        figsize: tuple[float, float] = (8.0, 7.0),
+        hide_axes: bool = True,
+        interactive: bool = True,
+        save_on_close: Optional[str] = None,
+    ) -> None:
+        """
+        Создаёт окно matplotlib, отрисовывает диаграмму и показывает.
+
+        Поддерживает интерактивность:
+        - координатный overlay при движении мыши
+        - перетаскивание текстовых меток (позиции сохраняются в модель)
+
+        Args:
+            figsize: Размер окна (ширина, высота) в дюймах
+            hide_axes: Скрыть рамку осей
+            interactive: Включить интерактивность (overlay, drag)
+            save_on_close: Путь к файлу для автосохранения при закрытии окна.
+                           Если None — не сохраняет автоматически.
+
+        Example:
+            >>> d = Diagram.load("project.json")
+            >>> d.show()  # просто показать
+            
+            >>> d.show(save_on_close="project.json")  # сохранить изменения при закрытии
+        """
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=figsize)
+        self.draw(ax, hide_axes=hide_axes, apply_margins=True, interactive=interactive)
+
+        if save_on_close is not None:
+            filepath = save_on_close
+
+            def _on_close(event: object) -> None:
+                if self._manager.is_modified:
+                    self._manager.save_to_file(filepath)
+
+            fig.canvas.mpl_connect("close_event", _on_close)
+
+        plt.show()
     
     # =========================================================================
     # ТОЧКИ
@@ -434,7 +567,335 @@ class Diagram:
     def list_lines(self) -> list[LineInfo]:
         """Возвращает список всех линий"""
         return [self.get_line(line.uid) for line in self._manager.get_all_lines()]
-    
+
+    # =========================================================================
+    # HATCH REGIONS
+    # =========================================================================
+
+    def add_hatch_region(
+        self,
+        vertices: Optional[list[tuple[float, float, float]]] = None,
+        *,
+        segments: Optional[list] = None,
+        name: str = "Region",
+        hatch: str = "//",
+        hatch_color: str = "#000000",
+        fill_color: str = "#000000",
+        fill_alpha: float = 0.05,
+        edge_color: str = "#000000",
+        edge_width: float = 1.0,
+    ) -> str:
+        """
+        Добавляет область с hatch-заливкой.
+
+        Два способа задания границы:
+
+        Способ 1 — простой полигон (прямые стороны):
+            diagram.add_hatch_region(
+                [(0.5, 0.3, 0.2), (0.2, 0.5, 0.3), (0.3, 0.2, 0.5)],
+                hatch="//",
+            )
+
+        Способ 2 — segment-based контур (границы вдоль линий/кривых):
+            diagram.add_hatch_region(
+                segments=[
+                    ("line", line_uid),
+                    ("curve", curve_uid, True),  # reverse=True
+                    ("straight", (0.5, 0.3, 0.2), (0.3, 0.2, 0.5)),
+                ],
+            )
+
+        Args:
+            vertices: Список координат (a, b, c) для простого полигона
+            segments: Список сегментов для сложного контура
+            name: Имя региона
+            hatch: Паттерн штриховки (/, \\, //, x, +, o, ...)
+            hatch_color: Цвет штриховки
+            fill_color: Цвет заливки
+            fill_alpha: Прозрачность заливки (0.0–1.0)
+            edge_color: Цвет границы
+            edge_width: Толщина границы
+
+        Returns:
+            UID созданного региона
+        """
+        if vertices is not None and segments is not None:
+            raise ValueError("Specify either 'vertices' or 'segments', not both")
+
+        if vertices is not None:
+            boundary = self._vertices_to_segments(vertices)
+        elif segments is not None:
+            boundary = self._parse_segments(segments)
+        else:
+            raise ValueError("Either 'vertices' or 'segments' must be provided")
+
+        return self._manager.create_hatch_region(
+            segments=boundary,
+            name=name,
+            hatch_pattern=hatch,
+            hatch_color=hatch_color,
+            fill_color=fill_color,
+            fill_alpha=fill_alpha,
+            edge_color=edge_color,
+            edge_width=edge_width,
+        )
+
+    def remove_hatch_region(self, uid: str) -> None:
+        """Удаляет hatch-регион."""
+        try:
+            self._manager.delete_hatch_region(uid)
+        except EntityNotFoundError:
+            raise KeyError(f"Hatch region not found: {uid}")
+
+    def list_hatch_regions(self) -> list[str]:
+        """Возвращает список UID всех hatch-регионов."""
+        return [h.uid for h in self._manager.project_data.hatch_regions]
+
+    @staticmethod
+    def _vertices_to_segments(
+        vertices: list[tuple[float, float, float]],
+    ) -> list[BoundarySegment]:
+        """Преобразует список вершин в замкнутый контур из StraightSegment."""
+        if len(vertices) < 3:
+            raise ValueError("At least 3 vertices required for a polygon")
+
+        segs: list[BoundarySegment] = []
+        for i in range(len(vertices)):
+            a1, b1, c1 = vertices[i]
+            a2, b2, c2 = vertices[(i + 1) % len(vertices)]
+            segs.append(StraightSegment(
+                start=_Composition(a=a1, b=b1, c=c1),
+                end=_Composition(a=a2, b=b2, c=c2),
+            ))
+        return segs
+
+    @staticmethod
+    def _parse_segments(raw: list) -> list[BoundarySegment]:
+        """Парсит пользовательский формат сегментов в модели."""
+        segs: list[BoundarySegment] = []
+        for item in raw:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                raise ValueError(f"Invalid segment: {item}")
+
+            kind = item[0]
+
+            if kind == "straight":
+                if len(item) != 3:
+                    raise ValueError(f"Straight segment needs (kind, start, end): {item}")
+                a1, b1, c1 = item[1]
+                a2, b2, c2 = item[2]
+                segs.append(StraightSegment(
+                    start=_Composition(a=a1, b=b1, c=c1),
+                    end=_Composition(a=a2, b=b2, c=c2),
+                ))
+
+            elif kind == "line":
+                uid = item[1]
+                reverse = item[2] if len(item) > 2 else False
+                segs.append(LineRefSegment(line_uid=uid, reverse=bool(reverse)))
+
+            elif kind == "curve":
+                uid = item[1]
+                reverse = item[2] if len(item) > 2 else False
+                segs.append(CurveRefSegment(curve_uid=uid, reverse=bool(reverse)))
+
+            else:
+                raise ValueError(f"Unknown segment kind: {kind}")
+
+        return segs
+
+    # =========================================================================
+    # АННОТАЦИИ
+    # =========================================================================
+
+    def add_annotation(
+        self,
+        text: str,
+        a: float,
+        b: float,
+        c: float,
+        *,
+        font_size: float = 10.0,
+        color: str = "#000000",
+        bold: bool = False,
+        italic: bool = False,
+        ha: str = "center",
+        va: str = "center",
+        box: bool = False,
+        box_facecolor: str = "#ffffff",
+        box_edgecolor: str = "#000000",
+        box_alpha: float = 0.8,
+        box_pad: float = 0.3,
+        arrow_target: Optional[tuple[float, float, float]] = None,
+        arrow_color: str = "#000000",
+        visible: bool = True,
+    ) -> str:
+        """
+        Добавляет текстовую аннотацию на диаграмму.
+
+        Args:
+            text: Текст аннотации (поддерживает MathText: $Al_2O_3$)
+            a, b, c: Барицентрические координаты позиции текста
+            font_size: Размер шрифта (4–72)
+            color: Цвет текста (#RRGGBB)
+            bold: Жирный шрифт
+            italic: Курсив
+            ha: Горизонтальное выравнивание (left, center, right)
+            va: Вертикальное выравнивание (top, center, bottom, baseline)
+            box: Включить фоновую рамку
+            box_facecolor: Цвет заливки рамки
+            box_edgecolor: Цвет границы рамки
+            box_alpha: Прозрачность рамки (0.0–1.0)
+            box_pad: Отступ внутри рамки
+            arrow_target: Координаты (a, b, c) цели стрелки, или None
+            arrow_color: Цвет стрелки
+            visible: Видимость аннотации
+
+        Returns:
+            UID созданной аннотации
+
+        Example:
+            >>> uid = d.add_annotation("Eutectic", 0.33, 0.33, 0.34, font_size=12)
+
+            >>> uid = d.add_annotation(
+            ...     "$\\\\alpha$-phase", 0.7, 0.2, 0.1,
+            ...     bold=True, color="#E74C3C",
+            ...     arrow_target=(0.5, 0.3, 0.2),
+            ...     box=True,
+            ... )
+        """
+        uid = self._manager.create_annotation(text=text, a=a, b=b, c=c)
+
+        fields: dict[str, object] = {
+            "font_size": font_size,
+            "color": color,
+            "bold": bold,
+            "italic": italic,
+            "ha": ha,
+            "va": va,
+            "box_enabled": box,
+            "box_facecolor": box_facecolor,
+            "box_edgecolor": box_edgecolor,
+            "box_alpha": box_alpha,
+            "box_pad": box_pad,
+            "arrow_color": arrow_color,
+            "visible": visible,
+        }
+
+        if arrow_target is not None:
+            ta, tb, tc = arrow_target
+            fields["arrow_enabled"] = True
+            fields["arrow_target"] = _Composition(a=ta, b=tb, c=tc)
+        else:
+            fields["arrow_enabled"] = False
+
+        self._manager.update_annotation(uid, **fields)
+        return uid
+
+    def update_annotation(
+        self,
+        uid: str,
+        *,
+        text: Optional[str] = None,
+        a: Optional[float] = None,
+        b: Optional[float] = None,
+        c: Optional[float] = None,
+        font_size: Optional[float] = None,
+        color: Optional[str] = None,
+        bold: Optional[bool] = None,
+        italic: Optional[bool] = None,
+        ha: Optional[str] = None,
+        va: Optional[str] = None,
+        box: Optional[bool] = None,
+        box_facecolor: Optional[str] = None,
+        box_edgecolor: Optional[str] = None,
+        box_alpha: Optional[float] = None,
+        box_pad: Optional[float] = None,
+        arrow_target: Optional[tuple[float, float, float]] = None,
+        arrow_enabled: Optional[bool] = None,
+        arrow_color: Optional[str] = None,
+        visible: Optional[bool] = None,
+    ) -> None:
+        """
+        Обновляет параметры аннотации. Передавайте только изменяемые поля.
+
+        Args:
+            uid: Идентификатор аннотации
+            text: Новый текст
+            a, b, c: Новые координаты позиции
+            (остальные параметры — аналогично add_annotation)
+
+        Raises:
+            KeyError: Если аннотация не найдена
+        """
+        try:
+            self._manager.get_annotation(uid)
+        except EntityNotFoundError:
+            raise KeyError(f"Annotation not found: {uid}")
+
+        fields: dict[str, object] = {}
+
+        if text is not None:
+            fields["text"] = text
+        if a is not None or b is not None or c is not None:
+            ann = self._manager.get_annotation(uid)
+            pos = ann.position
+            new_a = a if a is not None else pos.a
+            new_b = b if b is not None else pos.b
+            new_c = c if c is not None else pos.c
+            fields["position"] = _Composition(a=new_a, b=new_b, c=new_c)
+        if font_size is not None:
+            fields["font_size"] = font_size
+        if color is not None:
+            fields["color"] = color
+        if bold is not None:
+            fields["bold"] = bold
+        if italic is not None:
+            fields["italic"] = italic
+        if ha is not None:
+            fields["ha"] = ha
+        if va is not None:
+            fields["va"] = va
+        if box is not None:
+            fields["box_enabled"] = box
+        if box_facecolor is not None:
+            fields["box_facecolor"] = box_facecolor
+        if box_edgecolor is not None:
+            fields["box_edgecolor"] = box_edgecolor
+        if box_alpha is not None:
+            fields["box_alpha"] = box_alpha
+        if box_pad is not None:
+            fields["box_pad"] = box_pad
+        if arrow_target is not None:
+            ta, tb, tc = arrow_target
+            fields["arrow_target"] = _Composition(a=ta, b=tb, c=tc)
+            fields["arrow_enabled"] = True
+        if arrow_enabled is not None:
+            fields["arrow_enabled"] = arrow_enabled
+        if arrow_color is not None:
+            fields["arrow_color"] = arrow_color
+        if visible is not None:
+            fields["visible"] = visible
+
+        if fields:
+            self._manager.update_annotation(uid, **fields)
+
+    def remove_annotation(self, uid: str) -> None:
+        """
+        Удаляет аннотацию.
+
+        Raises:
+            KeyError: Если аннотация не найдена
+        """
+        try:
+            self._manager.delete_annotation(uid)
+        except EntityNotFoundError:
+            raise KeyError(f"Annotation not found: {uid}")
+
+    def list_annotations(self) -> list[str]:
+        """Возвращает список UID всех аннотаций."""
+        return [a.uid for a in self._manager.project_data.annotations]
+
     # =========================================================================
     # РАСЧЁТЫ
     # =========================================================================

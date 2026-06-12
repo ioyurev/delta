@@ -594,15 +594,6 @@ def wait_cursor():
 
 # =============================================================================
 
-# Стили для сообщений в Analysis Panel (устаревшие, используются для обратной совместимости)
-STYLE_MESSAGE_SUCCESS = "color: green; font-weight: bold; background: #e0f0e0; padding: 10px; border-radius: 4px;"
-STYLE_MESSAGE_WARNING = "color: #856404; font-weight: bold; background: #fff3cd; padding: 10px; border-radius: 4px;"
-STYLE_MESSAGE_ERROR = "color: #721c24; font-weight: bold; background: #f8d7da; padding: 10px; border-radius: 4px;"
-STYLE_MESSAGE_DEFAULT = "font-weight: bold; padding: 10px; background: #f0f0f0; border-radius: 4px;"
-
-
-# =============================================================================
-
 # Адаптивные цвета для тёмной/светлой темы
 
 def is_dark_theme() -> bool:

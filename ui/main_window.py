@@ -2,7 +2,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, 
                                QVBoxLayout, QSplitter, QLabel, QTabWidget, 
                                QFileDialog, QMessageBox)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
 
@@ -27,6 +27,7 @@ from ui.widgets.about_dialog import AboutDialog
 from ui.widgets.docs_viewer import DocsViewer
 from ui.widgets.display_region_widget import DisplayRegionWidget
 from ui.widgets.annotation_widget import AnnotationWidget
+from ui.widgets.lever_mix_dialog import LeverMixDialog
 from ui.widgets.helpers import handle_entity_errors, build_menu, wait_cursor, get_overlay_style
 from delta import math_utils
 
@@ -58,9 +59,13 @@ class MainWindow(QMainWindow):
         # Активный диалог кривой (немодальный — может быть открыт параллельно)
         self._active_curve_dlg: CurveLineDialog | None = None
         # Немодальный диалог Lever Mix
-        self._lever_mix_dlg = None
+        self._lever_mix_dlg: LeverMixDialog | None = None
         # Кто ожидает результат выбора точки на холсте: "" | "curve" | "annotation:{field}"
         self._pending_pick_requester: str = ""
+
+        # Hover throttling — ограничиваем частоту перерисовки при движении мыши
+        self._pending_hover_comp: Composition | None = None
+        self._hover_timer: QTimer | None = None
 
         # Инициализация UI
         self._init_menu()
@@ -144,6 +149,12 @@ class MainWindow(QMainWindow):
         
         splitter.setStretchFactor(0, 1)
         main_layout.addWidget(splitter)
+
+        # Hover throttle timer
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(16)  # ~60 FPS
+        self._hover_timer.timeout.connect(self._process_pending_hover)
 
     def _create_canvas_area(self) -> QWidget:
         """Создаёт область с холстом и тулбаром"""
@@ -296,16 +307,14 @@ class MainWindow(QMainWindow):
         project_data = self.controller.project_data
         overlay = self.analysis_widget.get_overlay_data()
 
+        locked = project_data.render_settings.lock_aspect
+        self.canvas_view.set_aspect_locked(locked)
+
         self.canvas.draw_project(project_data, overlay_data=overlay, force_full_redraw=True)
         self.table_widget.update_view(project_data)
         self.lines_widget.update_view(project_data)
         self.region_widget.update_view(project_data)
         self.annotation_widget.update_view(project_data)
-
-        # Применяем lock_aspect из данных проекта
-        locked = project_data.lock_aspect
-        self.canvas.set_aspect_locked(locked)
-        self.canvas_view.set_aspect_locked(locked)
 
         # Блокируем сигналы чтобы update_view → _on_calc_request
         # не вызвал повторную перерисовку canvas
@@ -315,15 +324,24 @@ class MainWindow(QMainWindow):
 
 
     def _on_mouse_hover(self, comp: Composition):
-        """Обновляет оверлей с координатами"""
+        """Принимает координаты мыши и ставит в очередь обработку."""
         if comp.a < -0.01 or comp.b < -0.01 or comp.c < -0.01:
             self.coord_overlay.hide()
             return
 
+        # Обновляем overlay координат сразу (лёгкая операция)
+        self._update_coord_overlay(comp)
+
+        # Тяжёлую часть (analysis + canvas redraw) — через throttle
+        self._pending_hover_comp = comp
+        if self._hover_timer and not self._hover_timer.isActive():
+            self._hover_timer.start()
+
+    def _update_coord_overlay(self, comp: Composition) -> None:
+        """Обновляет текст оверлея координат (лёгкая операция)."""
         names = self.controller.get_components()
         d = DISPLAY_DECIMALS_CURSOR
-        
-        # Получаем нормализованные значения
+
         try:
             a, b, c = comp.normalized
             text = (
@@ -335,21 +353,26 @@ class MainWindow(QMainWindow):
                 f"{'─' * 14}\n"
                 f"Σ = 1.0"
             )
-        except Exception:
-            # Fallback для невалидных составов
+        except (ValueError, ZeroDivisionError):
             text = (
                 f"{names[0]}: {comp.a:.{d}f}\n"
                 f"{names[1]}: {comp.b:.{d}f}\n"
                 f"{names[2]}: {comp.c:.{d}f}"
             )
-        
+
         self.coord_overlay.setText(text)
         self.coord_overlay.adjustSize()
         self.coord_overlay.move(10, 10)
         self.coord_overlay.show()
         self.coord_overlay.raise_()
-        
-        # Обновляем analysis только когда вкладка видима
+
+    def _process_pending_hover(self) -> None:
+        """Обрабатывает отложенный hover (вызывается по таймеру ~60fps)."""
+        comp = self._pending_hover_comp
+        if comp is None:
+            return
+        self._pending_hover_comp = None
+
         if self.analysis_widget.isVisible():
             self.analysis_widget.on_cursor_move(comp)
             overlay = self.analysis_widget.get_overlay_data()
@@ -416,9 +439,7 @@ class MainWindow(QMainWindow):
 
     def _on_open_lever_mix(self) -> None:
         """Открывает (или поднимает) немодальный диалог Lever Mix."""
-        from ui.widgets.lever_mix_dialog import LeverMixDialog
-
-        if hasattr(self, '_lever_mix_dlg') and self._lever_mix_dlg is not None:
+        if self._lever_mix_dlg is not None:
             self._lever_mix_dlg.raise_()
             self._lever_mix_dlg.activateWindow()
             return
@@ -495,7 +516,7 @@ class MainWindow(QMainWindow):
                     self.controller.get_all_compositions(), key=lambda p: p.name
                 )
                 self._lever_mix_dlg.refresh_compositions(comps)
-        except Exception as exc:
+        except (ValidationError, EntityNotFoundError) as exc:
             QMessageBox.warning(self, "Creation Error", str(exc))
 
     def _on_lever_mix_closed(self) -> None:
@@ -680,7 +701,9 @@ class MainWindow(QMainWindow):
                     size=data.width,
                 ))
                 self.controller.update_curve_line_arrow(data.uid, data.arrow)
-                self.controller.update_curve_line_guides(data.uid, data.guide_points, data.poly_degree)
+                self.controller.update_curve_line_guides(
+                    data.uid, data.guide_points, data.poly_degree, data.curve_mode
+                )
                 self.controller.update_curve_line_guide_markers(
                     data.uid, data.show_guide_markers,
                     StyleUpdate(color=data.guide_marker_color,
@@ -775,9 +798,7 @@ class MainWindow(QMainWindow):
 
     def _on_aspect_changed(self, locked: bool):
         """Переключение режима пропорций и сохранение в проект"""
-        self.canvas.set_aspect_locked(locked)
-        self.canvas_view.set_aspect_locked(locked)
-        self.controller.update_lock_aspect(locked)
+        self.controller.update_render_settings(lock_aspect=locked)
         mode = "locked (equal)" if locked else "free (stretch)"
         self.statusBar().showMessage(f"Aspect ratio: {mode}", 2000)
 
@@ -798,10 +819,8 @@ class MainWindow(QMainWindow):
         )
 
     def _on_annotation_add(self) -> None:
-        uid = self.controller.create_annotation()
+        self.controller.create_annotation()
         self.statusBar().showMessage("Annotation added", 2000)
-        # Select the new item — update_view will be triggered by data_changed
-        self._last_added_annotation_uid = uid
 
     def _on_annotation_remove(self, uid: str) -> None:
         self.controller.delete_annotation(uid)
@@ -889,6 +908,11 @@ class MainWindow(QMainWindow):
 
     def save_project_as(self):
         """Диалог 'Сохранить как'"""
+        # Сброс таймера задержки ввода (debounce)
+        if self.table_widget._comp_update_timer.isActive():
+            self.table_widget._comp_update_timer.stop()
+            self.table_widget._on_comps_update()
+
         filepath, _ = QFileDialog.getSaveFileName(
             self, "Save Project As", "", "JSON (*.json)"
         )
@@ -971,28 +995,27 @@ class MainWindow(QMainWindow):
 
     def _on_delete_selected(self):
         """Удаляет выбранный элемент (состав или линию)"""
-        # 1. Проверяем фокус на таблице Compositions (вкладка 1)
-        if self.table_widget.table.hasFocus():
-            item = self.table_widget.table.currentItem()
-            if item:
-                uid = self.table_widget._row_to_uid.get(item.row())
-                if uid:
-                    self._on_comp_delete_req(uid)
-                    return
-        
-        # 2. Проверяем фокус на списке Lines (вкладка 2)
-        if self.lines_widget.list_widget.hasFocus():
-            list_item = self.lines_widget.list_widget.currentItem()
-            if list_item:
-                uid = list_item.data(Qt.ItemDataRole.UserRole)
-                if uid:
-                    self._on_line_del_req(uid)
-                    return
+        # 1. Таблица Compositions
+        if self.table_widget.has_table_focus():
+            uid = self.table_widget.get_selected_uid()
+            if uid:
+                self._on_comp_delete_req(uid)
+                return
 
-        # 3. (ВАЖНО) Если фокус внутри Analysis Panel (Manual Input Table),
-        # мы НЕ должны удалять никаких глобальных сущностей.
-        # QTableWidget сам обработает Delete для очистки ячейки.
-        if self.analysis_widget.table_manual.hasFocus():
+        # 2. Список Lines (теперь корректно обрабатывает и кривые)
+        if self.lines_widget.has_list_focus():
+            selected = self.lines_widget.get_selected_line()
+            if selected:
+                uid, is_curve = selected
+                if is_curve:
+                    self._on_curve_line_del_req(uid)
+                else:
+                    self._on_line_del_req(uid)
+                return
+
+        # 3. Manual Input в Analysis Panel — Delete обрабатывает сама таблица
+        if self.analysis_widget.has_manual_input_focus():
             return
-        
+
         self.statusBar().showMessage("Nothing selected to delete", 2000)
+

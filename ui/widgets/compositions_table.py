@@ -277,7 +277,7 @@ class CompositionsTable(QWidget):
         self.chk_inv.blockSignals(False)
 
         self.chk_aspect.blockSignals(True)
-        self.chk_aspect.setChecked(project_data.lock_aspect)
+        self.chk_aspect.setChecked(project_data.render_settings.lock_aspect)
         self.chk_aspect.blockSignals(False)
 
         self.chk_grid.blockSignals(True)
@@ -371,6 +371,17 @@ class CompositionsTable(QWidget):
                 self.table.selectRow(row)
                 self.table.scrollTo(self.table.model().index(row, 0))
                 break
+
+    def get_selected_uid(self) -> Optional[str]:
+        """UID выбранного состава или None."""
+        item = self.table.currentItem()
+        if item is None:
+            return None
+        return self._row_to_uid.get(item.row())
+
+    def has_table_focus(self) -> bool:
+        """True, если фокус ввода на таблице составов."""
+        return self.table.hasFocus()
 
     def _on_comps_update(self):
         self.components_changed.emit([self.ed_a.text(), self.ed_b.text(), self.ed_c.text()])

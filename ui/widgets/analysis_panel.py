@@ -16,6 +16,7 @@ from delta.constants import (
     COORD_INPUT_MIN,
     COORD_INPUT_MAX,
     NORMALIZATION_WARNING_THRESHOLD,
+    MIN_TRIANGLE_AREA_WARNING,
 )
 from typing import Optional, TYPE_CHECKING
 import math
@@ -387,6 +388,10 @@ class AnalysisPanel(QWidget):
             self._calculate_and_display(target_comp)
             self._emit_update_req()
 
+    def has_manual_input_focus(self) -> bool:
+        """True, если фокус на таблице ручного ввода координат."""
+        return self.table_manual.hasFocus()
+
     # =========================================================================
     # HELPERS — FORMULA TEXT BUILDERS
     # =========================================================================
@@ -456,214 +461,209 @@ class AnalysisPanel(QWidget):
         return "\n".join(lines)
 
     # =========================================================================
-    # MAIN CALCULATION
+    # РЕЖИМЫ РАСЧЁТА
     # =========================================================================
 
     def _calculate_and_display(self, comp: Composition) -> None:
+        """Диспетчер: валидация общего контекста и выбор режима расчёта."""
         if comp.total < EPSILON_ZERO:
             self.result_edit.setPlainText("⚠ Invalid composition (Sum ≈ 0)")
             return
 
-        uid_a = self.cb_comp_a.currentData()
-        uid_b = self.cb_comp_b.currentData()
-        p_a = self._get_comp(uid_a)
-        p_b = self._get_comp(uid_b)
-
+        p_a = self._get_comp(self.cb_comp_a.currentData())
+        p_b = self._get_comp(self.cb_comp_b.currentData())
         if not p_a or not p_b:
             return
 
-        is_mouse_source = (self.cb_target_source.currentIndex() == 0)
-
-        # Молярные массы вершин (None если не заданы)
-        raw_masses = self._controller.get_component_molar_masses()
-        has_masses = all(m is not None for m in raw_masses)
-        vertex_masses: tuple[float, float, float] | None = (
-            (float(raw_masses[0]), float(raw_masses[1]), float(raw_masses[2]))  # type: ignore[arg-type]
-            if has_masses else None
-        )
-        vertex_names = self._controller.get_components()
-
         try:
-            # --- LINEAR MODE ---
             if self.rb_linear.isChecked():
-                if uid_a == uid_b:
-                    self.result_edit.setPlainText("⚠ Basis compositions must be different.")
-                    return
-
-                if not is_mouse_source:
-                    if not math_utils.is_point_on_line(
-                        p_a.composition, p_b.composition, comp,
-                        tol=TOLERANCE_ON_LINE_STRICT,
-                    ):
-                        self.result_edit.setPlainText("⚠ Point is NOT on the selected line.")
-                        return
-
-                try:
-                    t = math_utils.get_lever_fraction(p_a.composition, p_b.composition, comp)
-                except DegenerateBasisError as e:
-                    self.result_edit.setPlainText(f"⚠ {e.reason}")
-                    return
-
-                if t < -EPSILON_SEGMENT or t > (1.0 + EPSILON_SEGMENT):
-                    self.result_edit.setPlainText("⚠ Point is OUTSIDE the segment.")
-                    return
-
-                atom_a = 1.0 - t
-                atom_b = t
-                n_a = p_a.composition.total
-                n_b = p_b.composition.total
-                mol_a, mol_b = math_utils.atom_fracs_to_mole_fracs(
-                    [atom_a, atom_b], [n_a, n_b]
-                )
-
-                d = DISPLAY_DECIMALS_ANALYSIS
-                na = self._fmt_name(p_a.name)
-                nb = self._fmt_name(p_b.name)
-                W = max(len(na), len(nb))
-                res_text = (
-                    f"Lever Rule (mol.%):\n"
-                    f"  {na:<{W}} : {mol_a*100:.{d}f}%\n"
-                    f"  {nb:<{W}} : {mol_b*100:.{d}f}%\n"
-                    f"  {'─' * (W + 14)}\n"
-                    f"  {'Total':<{W}} : {(mol_a + mol_b)*100:.{d}f}%"
-                )
-
-                if not is_mouse_source:
-                    ints = math_utils.find_integer_ratio([mol_a, mol_b])
-                    if ints:
-                        res_text += (
-                            f"\n\nStoichiometry (molar ratio):\n"
-                            f"  {na:<{W}} : {ints[0]}\n"
-                            f"  {nb:<{W}} : {ints[1]}"
-                        )
-
-                if vertex_masses is not None:
-                    M_a = math_utils.molar_mass_from_vertices(p_a.composition, vertex_masses)
-                    M_b = math_utils.molar_mass_from_vertices(p_b.composition, vertex_masses)
-                    res_text += (
-                        "\n\n─── Molar masses ─────────────────\n"
-                        + self._molar_mass_formula(p_a.name, p_a.composition, vertex_names, vertex_masses, M_a)
-                        + "\n"
-                        + self._molar_mass_formula(p_b.name, p_b.composition, vertex_names, vertex_masses, M_b)
-                        + "\n\n"
-                        + self._naveski_block(
-                            [p_a.name, p_b.name],
-                            [mol_a, mol_b],
-                            [M_a, M_b],
-                            self.spin_total_mass.value(),
-                        )
-                    )
-
-                self.result_edit.setPlainText(res_text)
-
-            # --- TERNARY MODE ---
+                text = self._calculate_linear(comp, p_a, p_b)
             else:
-                uid_c = self.cb_comp_c.currentData()
-                p_c = self._get_comp(uid_c)
-
-                if not p_c or len({uid_a, uid_b, uid_c}) < 3:
-                    self.result_edit.setPlainText("⚠ Select 3 distinct compositions.")
-                    return
-
-                if math_utils.are_compositions_collinear(
-                    p_a.composition, p_b.composition, p_c.composition
-                ):
-                    self.result_edit.setPlainText(
-                        "⚠ Compositions are collinear.\n"
-                        "Cannot calculate fractions for degenerate triangle."
-                    )
-                    return
-
-                is_inv = self._controller.is_inverted()
-
-                try:
-                    pt_a = math_utils.bary_to_cart(p_a.composition, is_inv)
-                    pt_b = math_utils.bary_to_cart(p_b.composition, is_inv)
-                    pt_c = math_utils.bary_to_cart(p_c.composition, is_inv)
-                    pt_t = math_utils.bary_to_cart(comp, is_inv)
-                except CompositionError:
-                    self.result_edit.setPlainText(
-                        "⚠ One of the basis compositions is invalid (sum=0)."
-                    )
-                    return
-
-                try:
-                    u, v, w = math_utils.get_barycentric_from_cartesian(
-                        float(pt_a[0]), float(pt_a[1]),
-                        float(pt_b[0]), float(pt_b[1]),
-                        float(pt_c[0]), float(pt_c[1]),
-                        float(pt_t[0]), float(pt_t[1]),
-                    )
-                except DegenerateTriangleError as e:
-                    self.result_edit.setPlainText(f"⚠ {e.reason}")
-                    return
-
-                is_inside = (
-                    -EPSILON_SEGMENT <= u <= 1.0 + EPSILON_SEGMENT
-                    and -EPSILON_SEGMENT <= v <= 1.0 + EPSILON_SEGMENT
-                    and -EPSILON_SEGMENT <= w <= 1.0 + EPSILON_SEGMENT
-                )
-                if not is_inside:
-                    self.result_edit.setPlainText("⚠ Point is OUTSIDE the selected triangle.")
-                    return
-
-                n_a = p_a.composition.total
-                n_b = p_b.composition.total
-                n_c = p_c.composition.total
-                mol_a, mol_b, mol_c = math_utils.atom_fracs_to_mole_fracs(
-                    [u, v, w], [n_a, n_b, n_c]
-                )
-
-                d = DISPLAY_DECIMALS_ANALYSIS
-                na = self._fmt_name(p_a.name)
-                nb = self._fmt_name(p_b.name)
-                nc = self._fmt_name(p_c.name)
-                W = max(len(na), len(nb), len(nc))
-                total = mol_a + mol_b + mol_c
-                res_text = (
-                    f"Basis Fractions (mol.%):\n"
-                    f"  {na:<{W}} : {mol_a*100:.{d}f}%\n"
-                    f"  {nb:<{W}} : {mol_b*100:.{d}f}%\n"
-                    f"  {nc:<{W}} : {mol_c*100:.{d}f}%\n"
-                    f"  {'─' * (W + 14)}\n"
-                    f"  {'Total':<{W}} : {total*100:.{d}f}%"
-                )
-
-                if not is_mouse_source:
-                    ints = math_utils.find_integer_ratio([mol_a, mol_b, mol_c])
-                    if ints:
-                        res_text += (
-                            f"\n\nStoichiometry (molar ratio):\n"
-                            f"  {na:<{W}} : {ints[0]}\n"
-                            f"  {nb:<{W}} : {ints[1]}\n"
-                            f"  {nc:<{W}} : {ints[2]}"
-                        )
-
-                if vertex_masses is not None:
-                    M_a = math_utils.molar_mass_from_vertices(p_a.composition, vertex_masses)
-                    M_b = math_utils.molar_mass_from_vertices(p_b.composition, vertex_masses)
-                    M_c = math_utils.molar_mass_from_vertices(p_c.composition, vertex_masses)
-                    res_text += (
-                        "\n\n─── Molar masses ─────────────────\n"
-                        + self._molar_mass_formula(p_a.name, p_a.composition, vertex_names, vertex_masses, M_a)
-                        + "\n"
-                        + self._molar_mass_formula(p_b.name, p_b.composition, vertex_names, vertex_masses, M_b)
-                        + "\n"
-                        + self._molar_mass_formula(p_c.name, p_c.composition, vertex_names, vertex_masses, M_c)
-                        + "\n\n"
-                        + self._naveski_block(
-                            [p_a.name, p_b.name, p_c.name],
-                            [mol_a, mol_b, mol_c],
-                            [M_a, M_b, M_c],
-                            self.spin_total_mass.value(),
-                        )
-                    )
-
-                self.result_edit.setPlainText(res_text)
-
+                text = self._calculate_ternary(comp, p_a, p_b)
         except (CompositionError, ValueError, ZeroDivisionError,
                 DegenerateBasisError, DegenerateTriangleError) as e:
-            self.result_edit.setPlainText(f"⚠ Calculation error: {e}")
+            text = f"⚠ Calculation error: {e}"
+
+        self.result_edit.setPlainText(text)
+
+    def _is_mouse_source(self) -> bool:
+        return self.cb_target_source.currentIndex() == 0
+
+    def _get_vertex_masses(self) -> Optional[tuple[float, float, float]]:
+        """Молярные массы вершин или None, если заданы не все."""
+        raw = self._controller.get_component_molar_masses()
+        if not all(m is not None for m in raw):
+            return None
+        return (float(raw[0]), float(raw[1]), float(raw[2]))  # type: ignore[arg-type]
+
+    def _calculate_linear(
+        self,
+        comp: Composition,
+        p_a: NamedComposition,
+        p_b: NamedComposition,
+    ) -> str:
+        """Расчёт правила рычага на коноде. Возвращает текст результата."""
+        if p_a.uid == p_b.uid:
+            return "⚠ Basis compositions must be different."
+
+        is_mouse = self._is_mouse_source()
+
+        if not is_mouse:
+            if not math_utils.is_point_on_line(
+                p_a.composition, p_b.composition, comp,
+                tol=TOLERANCE_ON_LINE_STRICT,
+            ):
+                return "⚠ Point is NOT on the selected line."
+
+        try:
+            t = math_utils.get_lever_fraction(
+                p_a.composition, p_b.composition, comp
+            )
+        except DegenerateBasisError as e:
+            return f"⚠ {e.reason}"
+
+        if t < -EPSILON_SEGMENT or t > (1.0 + EPSILON_SEGMENT):
+            return "⚠ Point is OUTSIDE the segment."
+
+        mol_fracs = math_utils.atom_fracs_to_mole_fracs(
+            [1.0 - t, t],
+            [p_a.composition.total, p_b.composition.total],
+        )
+
+        names = [p_a.name, p_b.name]
+        text = self._format_fractions("Lever Rule (mol.%)", names, mol_fracs)
+
+        if not is_mouse:
+            text += self._format_stoichiometry(names, mol_fracs)
+
+        text += self._format_masses_block([p_a, p_b], mol_fracs)
+        return text
+
+    def _calculate_ternary(
+        self,
+        comp: Composition,
+        p_a: NamedComposition,
+        p_b: NamedComposition,
+    ) -> str:
+        """Расчёт долей в тройном базисе. Возвращает текст результата."""
+        p_c = self._get_comp(self.cb_comp_c.currentData())
+
+        if not p_c or len({p_a.uid, p_b.uid, p_c.uid}) < 3:
+            return "⚠ Select 3 distinct compositions."
+
+        if math_utils.are_compositions_collinear(
+            p_a.composition, p_b.composition, p_c.composition
+        ):
+            return (
+                "⚠ Compositions are collinear.\n"
+                "Cannot calculate fractions for degenerate triangle."
+            )
+
+        is_inv = self._controller.is_inverted()
+
+        try:
+            pt_a = math_utils.bary_to_cart(p_a.composition, is_inv)
+            pt_b = math_utils.bary_to_cart(p_b.composition, is_inv)
+            pt_c = math_utils.bary_to_cart(p_c.composition, is_inv)
+            pt_t = math_utils.bary_to_cart(comp, is_inv)
+        except CompositionError:
+            return "⚠ One of the basis compositions is invalid (sum=0)."
+
+        try:
+            u, v, w = math_utils.get_barycentric_from_cartesian(
+                float(pt_a[0]), float(pt_a[1]),
+                float(pt_b[0]), float(pt_b[1]),
+                float(pt_c[0]), float(pt_c[1]),
+                float(pt_t[0]), float(pt_t[1]),
+            )
+        except DegenerateTriangleError as e:
+            return f"⚠ {e.reason}"
+
+        in_range = all(
+            -EPSILON_SEGMENT <= x <= 1.0 + EPSILON_SEGMENT for x in (u, v, w)
+        )
+        if not in_range:
+            return "⚠ Point is OUTSIDE the selected triangle."
+
+        mol_fracs = math_utils.atom_fracs_to_mole_fracs(
+            [u, v, w],
+            [p_a.composition.total, p_b.composition.total, p_c.composition.total],
+        )
+
+        names = [p_a.name, p_b.name, p_c.name]
+        text = self._format_fractions("Basis Fractions (mol.%)", names, mol_fracs)
+
+        if not self._is_mouse_source():
+            text += self._format_stoichiometry(names, mol_fracs)
+
+        text += self._format_masses_block([p_a, p_b, p_c], mol_fracs)
+        return text
+
+    # =========================================================================
+    # ФОРМАТТЕРЫ (общие для обоих режимов — DRY)
+    # =========================================================================
+
+    def _format_fractions(
+        self, title: str, names: list[str], mol_fracs: list[float]
+    ) -> str:
+        """Блок мольных долей с выравниванием."""
+        d = DISPLAY_DECIMALS_ANALYSIS
+        short = [self._fmt_name(n) for n in names]
+        W = max(len(s) for s in short)
+
+        lines = [f"{title}:"]
+        for s, frac in zip(short, mol_fracs):
+            lines.append(f"  {s:<{W}} : {frac * 100:.{d}f}%")
+        lines.append(f"  {'─' * (W + 14)}")
+        total = math.fsum(mol_fracs)
+        lines.append(f"  {'Total':<{W}} : {total * 100:.{d}f}%")
+        return "\n".join(lines)
+
+    def _format_stoichiometry(
+        self, names: list[str], mol_fracs: list[float]
+    ) -> str:
+        """Блок стехиометрии. Пустая строка, если соотношение не найдено."""
+        ints = math_utils.find_integer_ratio(mol_fracs)
+        if not ints:
+            return ""
+
+        short = [self._fmt_name(n) for n in names]
+        W = max(len(s) for s in short)
+
+        lines = ["", "", "Stoichiometry (molar ratio):"]
+        for s, i in zip(short, ints):
+            lines.append(f"  {s:<{W}} : {i}")
+        return "\n".join(lines)
+
+    def _format_masses_block(
+        self, comps: list[NamedComposition], mol_fracs: list[float]
+    ) -> str:
+        """Блок молярных масс и навесок. Пустая строка, если массы не заданы."""
+        vertex_masses = self._get_vertex_masses()
+        if vertex_masses is None:
+            return ""
+
+        vertex_names = self._controller.get_components()
+
+        M_vals = [
+            math_utils.molar_mass_from_vertices(p.composition, vertex_masses)
+            for p in comps
+        ]
+
+        parts = ["", "", "─── Molar masses ─────────────────"]
+        for p, M in zip(comps, M_vals):
+            parts.append(self._molar_mass_formula(
+                p.name, p.composition, vertex_names, vertex_masses, M
+            ))
+
+        parts.append("")
+        parts.append(self._naveski_block(
+            [p.name for p in comps],
+            mol_fracs,
+            M_vals,
+            self.spin_total_mass.value(),
+        ))
+        return "\n".join(parts)
 
     def get_overlay_data(self) -> RenderOverlay:
         overlay = RenderOverlay()
@@ -771,7 +771,7 @@ class AnalysisPanel(QWidget):
             p_a.composition, p_b.composition, p_c.composition
         )
         
-        if area < 0.001:  # Очень маленький треугольник
+        if area < MIN_TRIANGLE_AREA_WARNING:  # Очень маленький треугольник
             return True, (
                 f"Warning: Very small triangle (area = {area:.4f}).\n"
                 "Results may have reduced precision."

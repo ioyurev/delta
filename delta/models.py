@@ -9,7 +9,8 @@
 
 import math
 import uuid
-from typing import List, Tuple, Optional, Dict
+from typing import Annotated, List, Literal, Tuple, Optional, Dict, Union
+from pydantic import Discriminator
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from enum import Enum, auto
 from dataclasses import dataclass, field
@@ -262,20 +263,28 @@ class GuidePoint(BaseModel):
 
 
 class CurveLine(BaseModel):
-    """Кривая линия: проходит через start/end, аппроксимирует guide_points"""
+    """Кривая линия: проходит через start/end, интерполирует или аппроксимирует guide_points"""
     model_config = ConfigDict(validate_assignment=True)
 
     uid: str = Field(default_factory=lambda: str(uuid.uuid4()))
     start_uid: str = ""
     end_uid: str = ""
     guide_points: List[GuidePoint] = Field(default_factory=list)
-    poly_degree: int = Field(default=3, ge=2, le=5)
+    curve_mode: str = "spline"  # "spline" | "polynomial"
+    poly_degree: int = Field(default=3, ge=1, le=5)
     show_guide_markers: bool = False
     guide_marker_style: VisualStyle = Field(
         default_factory=lambda: VisualStyle(color="#888888")
     )
     style: VisualStyle = Field(default_factory=lambda: VisualStyle(size=LINE_WIDTH_DEFAULT))
     arrow: ArrowSettings = Field(default_factory=ArrowSettings)
+
+    @field_validator('curve_mode')
+    @classmethod
+    def validate_curve_mode(cls, v: str) -> str:
+        if v not in ("spline", "polynomial"):
+            return "spline"
+        return v
 
     @model_validator(mode='after')
     def validate_different_endpoints(self) -> 'CurveLine':
@@ -343,6 +352,108 @@ class TextAnnotation(BaseModel):
 
 
 # =============================================================================
+# HATCH REGION
+# =============================================================================
+
+class StraightSegment(BaseModel):
+    """Прямой отрезок границы."""
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["straight"] = "straight"
+    start: Composition
+    end: Composition
+
+
+class LineRefSegment(BaseModel):
+    """Граница, совпадающая с существующей TieLine."""
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["line_ref"] = "line_ref"
+    line_uid: str
+    reverse: bool = False
+
+
+class CurveRefSegment(BaseModel):
+    """Граница, совпадающая с существующей CurveLine."""
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["curve_ref"] = "curve_ref"
+    curve_uid: str
+    reverse: bool = False
+
+
+BoundarySegment = Annotated[
+    Union[StraightSegment, LineRefSegment, CurveRefSegment],
+    Discriminator("kind"),
+]
+
+
+class HatchRegion(BaseModel):
+    """Область с hatch-заливкой, ограниченная замкнутым контуром из сегментов."""
+    model_config = ConfigDict(validate_assignment=True)
+
+    uid: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = "Region"
+    segments: List[BoundarySegment] = Field(default_factory=list)
+    hatch_pattern: str = "//"
+    hatch_color: str = "#000000"
+    fill_color: str = "#000000"
+    fill_alpha: float = Field(default=0.05, ge=0.0, le=1.0)
+    edge_color: str = "#000000"
+    edge_width: float = Field(default=1.0, ge=0.0, le=10.0)
+    visible: bool = True
+
+    @field_validator('hatch_pattern')
+    @classmethod
+    def validate_hatch(cls, v: str) -> str:
+        valid_chars = set("/\\|-+xoO.*")
+        if not v or not all(c in valid_chars for c in v):
+            return "//"
+        return v
+
+    @field_validator('hatch_color', 'fill_color', 'edge_color')
+    @classmethod
+    def validate_color(cls, v: str) -> str:
+        v = v.strip()
+        if not v.startswith('#') or len(v) not in (4, 7):
+            if len(v) == 6 and all(c in '0123456789abcdefABCDEF' for c in v):
+                return f"#{v}"
+            return "#000000"
+        return v
+
+
+# =============================================================================
+# RENDER SETTINGS
+# =============================================================================
+
+class FigureMargins(BaseModel):
+    """Отступы figure в долях размера: left/right/top/bottom."""
+    model_config = ConfigDict(validate_assignment=True)
+
+    left: float = Field(default=0.05, ge=0.0, lt=1.0)
+    right: float = Field(default=0.05, ge=0.0, lt=1.0)
+    top: float = Field(default=0.05, ge=0.0, lt=1.0)
+    bottom: float = Field(default=0.05, ge=0.0, lt=1.0)
+
+    @model_validator(mode='after')
+    def validate_totals(self) -> 'FigureMargins':
+        if self.left + self.right >= 1.0:
+            raise ValueError("FigureMargins: left + right must be < 1.0")
+        if self.top + self.bottom >= 1.0:
+            raise ValueError("FigureMargins: top + bottom must be < 1.0")
+        return self
+
+
+class RenderSettings(BaseModel):
+    """Настройки рендера, единые для GUI и headless."""
+    model_config = ConfigDict(validate_assignment=True)
+
+    lock_aspect: bool = True
+    figure_margins: FigureMargins = Field(default_factory=FigureMargins)
+    display_region_padding: float = Field(default=0.05, ge=0.0)
+
+
+# =============================================================================
 # PROJECT DATA
 # =============================================================================
 
@@ -350,6 +461,7 @@ class ProjectData(BaseModel):
     """Корневой объект проекта"""
     model_config = ConfigDict(validate_assignment=True)
 
+    version: str = "1.1"
     components: List[str] = Field(default_factory=lambda: ["A", "B", "C"])
     component_molar_masses: List[Optional[float]] = Field(
         default_factory=lambda: [None, None, None]  # type: ignore[arg-type]
@@ -359,11 +471,20 @@ class ProjectData(BaseModel):
     curve_lines: List[CurveLine] = Field(default_factory=list)
     grid: GridSettings = Field(default_factory=GridSettings)
     is_inverted: bool = False
-    lock_aspect: bool = True
+    render_settings: RenderSettings = Field(default_factory=RenderSettings)
     display_region: List[Composition] = Field(default_factory=list)
     display_region_enabled: bool = False
     annotations: List[TextAnnotation] = Field(default_factory=list)
+    hatch_regions: List[HatchRegion] = Field(default_factory=list)
     vertex_labels_pos: Dict[str, Tuple[float, float]] = Field(default_factory=dict)
+
+    @property
+    def lock_aspect(self) -> bool:
+        """
+        Совместимость со старым кодом чтения.
+        Источник истины: render_settings.lock_aspect
+        """
+        return self.render_settings.lock_aspect
 
     @field_validator('components')
     @classmethod
@@ -375,8 +496,10 @@ class ProjectData(BaseModel):
 
     @model_validator(mode='after')
     def validate_line_references(self) -> 'ProjectData':
-        """Проверка целостности ссылок в линиях"""
+        """Проверка целостности ссылок в линиях и hatch regions"""
         comp_uids = {c.uid for c in self.compositions}
+        line_uids = {ln.uid for ln in self.lines}
+        curve_uids = {cl.uid for cl in self.curve_lines}
 
         for line in self.lines:
             if line.start_uid and line.start_uid not in comp_uids:
@@ -390,64 +513,44 @@ class ProjectData(BaseModel):
             if cline.end_uid and cline.end_uid not in comp_uids:
                 raise ValueError(f"Curve line references unknown composition: {cline.end_uid}")
 
+        for region in self.hatch_regions:
+            for seg in region.segments:
+                if isinstance(seg, LineRefSegment) and seg.line_uid not in line_uids:
+                    raise ValueError(f"Hatch region references unknown line: {seg.line_uid}")
+                if isinstance(seg, CurveRefSegment) and seg.curve_uid not in curve_uids:
+                    raise ValueError(f"Hatch region references unknown curve: {seg.curve_uid}")
+
         return self
 
 
 # =============================================================================
-# OVERLAY & RENDER (остаются dataclass для простоты)
-# =============================================================================
-
-@dataclass
-class OverlayLine:
-    """Линия для временной отрисовки"""
-    start: Composition
-    end: Composition
-    color: str = "gray"
-    style: str = "--"
-    highlight: bool = False
-
-
-@dataclass
-class RenderOverlay:
-    """Контейнер для временных объектов на холсте"""
-    highlight_lines_uids: List[str] = field(default_factory=list)
-    highlight_comp_uids: List[str] = field(default_factory=list)
-    extrap_lines: List[OverlayLine] = field(default_factory=list)
-    projection_point: Optional[Composition] = None
-    intersect_point: Optional[Composition] = None
-    triangle_overlay: List[Composition] = field(default_factory=list)
-    mix_preview_point: Optional[Composition] = None
-    mix_preview_color: str = "#e67e00"
-    mix_preview_symbol: str = "*"
-    mix_preview_size: float = 14.0
-    mix_baseline: Optional['OverlayLine'] = None
-
-
-# =============================================================================
-# DTOs (остаются dataclass)
+# DTOs
 # =============================================================================
 
 @dataclass
 class CompositionUpdate:
-    """DTO для частичного обновления состава"""
+    """DTO для обновления координат и имени состава"""
     name: Optional[str] = None
     a: Optional[float] = None
     b: Optional[float] = None
     c: Optional[float] = None
     
     def has_coordinate_changes(self) -> bool:
-        return self.a is not None or self.b is not None or self.c is not None
+        return any(v is not None for v in (self.a, self.b, self.c))
     
     def apply_to(self, comp: NamedComposition) -> None:
         if self.name is not None:
             comp.name = self.name
-        if self.has_coordinate_changes():
-            comp.composition = Composition(
-                a=self.a if self.a is not None else comp.composition.a,
-                b=self.b if self.b is not None else comp.composition.b,
-                c=self.c if self.c is not None else comp.composition.c,
-            )
-    
+        
+        # Обновляем координаты (модель Pydantic свалидирует их при присваивании)
+        new_coords = {
+            'a': self.a if self.a is not None else comp.composition.a,
+            'b': self.b if self.b is not None else comp.composition.b,
+            'c': self.c if self.c is not None else comp.composition.c,
+        }
+        # Т.к. Composition frozen, создаём новый объект
+        object.__setattr__(comp, 'composition', Composition(**new_coords))
+
     @classmethod
     def coordinate(cls, field: str, value: float) -> 'CompositionUpdate':
         if field == 'a':
@@ -503,3 +606,41 @@ class IntersectionResult:
     intersection: Optional[Composition] = None
     line1_endpoints: Optional[tuple[Composition, Composition]] = None
     line2_endpoints: Optional[tuple[Composition, Composition]] = None
+
+
+# =============================================================================
+# RENDER OVERLAY
+# =============================================================================
+
+@dataclass
+class OverlayLine:
+    start: Composition
+    end: Composition
+    color: str = "gray"
+    style: str = "--"
+    highlight: bool = False
+
+
+@dataclass
+class RenderOverlay:
+    """Временные элементы поверх диаграммы (для интерактива)"""
+    # Точки
+    projection_point: Optional[Composition] = None
+    intersect_point: Optional[Composition] = None
+    
+    # Линии
+    extrap_lines: List[OverlayLine] = field(default_factory=list)
+    
+    # Треугольник (для выбора области)
+    triangle_overlay: Optional[List[Composition]] = None
+
+    # Предпросмотр смеси
+    mix_baseline: Optional[OverlayLine] = None
+    mix_preview_point: Optional[Composition] = None
+    mix_preview_color: str = "red"
+    mix_preview_symbol: str = "o"
+    mix_preview_size: float = 8.0
+
+    # Подсветка (UID-ы существующих элементов)
+    highlight_lines_uids: List[str] = field(default_factory=list)
+    highlight_comp_uids: List[str] = field(default_factory=list)

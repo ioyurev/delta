@@ -7,13 +7,15 @@
 """
 
 import copy
-from typing import Optional, List, Dict, Callable
+from contextlib import contextmanager
+from typing import Optional, List, Dict, Callable, Iterator
 from pydantic import ValidationError as PydanticValidationError
 
 from delta.models import (
     ProjectData, NamedComposition, TieLine, CurveLine, GuidePoint, Composition,
     CompositionUpdate, StyleUpdate, ArrowSettings, IntersectionResult, IntersectionStatus,
-    TextAnnotation,
+    TextAnnotation, HatchRegion, BoundarySegment, LineRefSegment, CurveRefSegment,
+    FigureMargins,
 )
 from delta import math_utils
 from delta.constants import EPSILON_BOUNDARY
@@ -70,6 +72,7 @@ class ProjectManager:
         self._line_map: Dict[str, TieLine] = {}
         self._curve_map: Dict[str, CurveLine] = {}
         self._annotation_map: Dict[str, TextAnnotation] = {}
+        self._hatch_map: Dict[str, HatchRegion] = {}
         
         # Режим пакетной обработки (подавляет уведомления)
         self._batch_mode = False
@@ -231,13 +234,11 @@ class ProjectManager:
         comp.style.show_label = show_label
         comp.style.show_marker = show_marker
         
-        self._save_undo_before_change()                         # ◄ FIX: ДО мутации
-        
-        self._project.compositions.append(comp)
-        self._comp_map[comp.uid] = comp
+        with self._transact():
+            self._project.compositions.append(comp)
+            self._comp_map[comp.uid] = comp
         
         logger.bind(uid=comp.uid).info(f"Created composition '{name}'")
-        self._notify_change(save_undo=False)                    # ◄ FIX: уже сохранили
         return comp.uid
 
     def create_line(self, start_uid: str, end_uid: str) -> str:
@@ -268,14 +269,13 @@ class ProjectManager:
             if {line.start_uid, line.end_uid} == {start_uid, end_uid}:
                 raise DuplicateEntityError("Line already exists")
         
-        self._save_undo_before_change()                         # ◄ FIX
-        
         line = TieLine(start_uid=start_uid, end_uid=end_uid)
-        self._project.lines.append(line)
-        self._line_map[line.uid] = line
+        
+        with self._transact():
+            self._project.lines.append(line)
+            self._line_map[line.uid] = line
         
         logger.bind(uid=line.uid).info(f"Created line {start_uid} -> {end_uid}")
-        self._notify_change(save_undo=False)                    # ◄ FIX
         return line.uid
 
     # =========================================================================
@@ -284,35 +284,61 @@ class ProjectManager:
 
     def update_components(self, names: List[str]) -> None:
         if len(names) == 3:
-            self._save_undo_before_change()                     # ◄ FIX
-            self._project.components = names
-            self._notify_change(save_undo=False)
+            with self._transact():
+                self._project.components = names
 
     def update_component_molar_masses(self, masses: List[Optional[float]]) -> None:
         if len(masses) == 3:
-            self._project.component_molar_masses = list(masses)
-            self._notify_change(save_undo=False)
+            with self._transact():
+                self._project.component_molar_masses = list(masses)
 
     def update_grid(self, visible: bool, step: float) -> None:
-        self._save_undo_before_change()                         # ◄ FIX
-        self._project.grid.visible = visible
-        self._project.grid.step = step
-        self._notify_change(save_undo=False)
+        with self._transact():
+            self._project.grid.visible = visible
+            self._project.grid.step = step
+
+    def update_render_settings(
+        self,
+        *,
+        lock_aspect: Optional[bool] = None,
+        figure_margins: Optional[FigureMargins] = None,
+        display_region_padding: Optional[float] = None,
+    ) -> None:
+        settings = self._project.render_settings
+
+        changed = False
+        if lock_aspect is not None and settings.lock_aspect != lock_aspect:
+            changed = True
+        if figure_margins is not None and settings.figure_margins != figure_margins:
+            changed = True
+        if (
+            display_region_padding is not None
+            and settings.display_region_padding != display_region_padding
+        ):
+            changed = True
+
+        if not changed:
+            return
+
+        with self._transact():
+            if lock_aspect is not None:
+                settings.lock_aspect = lock_aspect
+            if figure_margins is not None:
+                settings.figure_margins = figure_margins
+            if display_region_padding is not None:
+                settings.display_region_padding = display_region_padding
 
     def update_lock_aspect(self, locked: bool) -> None:
-        self._save_undo_before_change()
-        self._project.lock_aspect = locked
-        self._notify_change(save_undo=False)
+        """Backward-compatible wrapper."""
+        self.update_render_settings(lock_aspect=locked)
 
     def update_display_region(self, points: List[Composition]) -> None:
-        self._save_undo_before_change()
-        self._project.display_region = list(points)
-        self._notify_change(save_undo=False)
+        with self._transact():
+            self._project.display_region = list(points)
 
     def update_display_region_enabled(self, enabled: bool) -> None:
-        self._save_undo_before_change()
-        self._project.display_region_enabled = enabled
-        self._notify_change(save_undo=False)
+        with self._transact():
+            self._project.display_region_enabled = enabled
 
     # =========================================================================
     # АННОТАЦИИ
@@ -326,10 +352,9 @@ class ProjectManager:
         c: float = 34.0,
     ) -> str:
         ann = TextAnnotation(text=text, position=Composition(a=a, b=b, c=c))
-        self._save_undo_before_change()
-        self._project.annotations.append(ann)
-        self._annotation_map[ann.uid] = ann
-        self._notify_change(save_undo=False)
+        with self._transact():
+            self._project.annotations.append(ann)
+            self._annotation_map[ann.uid] = ann
         return ann.uid
 
     def get_annotation(self, uid: str) -> TextAnnotation:
@@ -343,30 +368,75 @@ class ProjectManager:
 
     def update_annotation(self, uid: str, **fields) -> None:
         ann = self.get_annotation(uid)
-        self._save_undo_before_change()
-        for k, v in fields.items():
-            setattr(ann, k, v)
-        self._notify_change(save_undo=False)
+        with self._transact():
+            for k, v in fields.items():
+                setattr(ann, k, v)
 
     def delete_annotation(self, uid: str) -> None:
         ann = self.get_annotation(uid)
-        self._save_undo_before_change()
-        self._project.annotations.remove(ann)
-        del self._annotation_map[uid]
-        self._notify_change(save_undo=False)
+        with self._transact():
+            self._project.annotations.remove(ann)
+            del self._annotation_map[uid]
+
+    # =========================================================================
+    # HATCH REGIONS
+    # =========================================================================
+
+    def create_hatch_region(
+        self,
+        segments: List[BoundarySegment],
+        *,
+        name: str = "Region",
+        hatch_pattern: str = "//",
+        hatch_color: str = "#000000",
+        fill_color: str = "#000000",
+        fill_alpha: float = 0.05,
+        edge_color: str = "#000000",
+        edge_width: float = 1.0,
+    ) -> str:
+        region = HatchRegion(
+            name=name,
+            segments=segments,
+            hatch_pattern=hatch_pattern,
+            hatch_color=hatch_color,
+            fill_color=fill_color,
+            fill_alpha=fill_alpha,
+            edge_color=edge_color,
+            edge_width=edge_width,
+        )
+        with self._transact():
+            self._project.hatch_regions.append(region)
+            self._hatch_map[region.uid] = region
+        return region.uid
+
+    def get_hatch_region(self, uid: str) -> HatchRegion:
+        region = self._hatch_map.get(uid)
+        if region is None:
+            raise EntityNotFoundError("HatchRegion", uid)
+        return region
+
+    def update_hatch_region(self, uid: str, **fields: object) -> None:
+        region = self.get_hatch_region(uid)
+        with self._transact():
+            for k, v in fields.items():
+                setattr(region, k, v)
+
+    def delete_hatch_region(self, uid: str) -> None:
+        self.get_hatch_region(uid)
+        with self._transact():
+            del self._hatch_map[uid]
+            self._project.hatch_regions = [
+                h for h in self._project.hatch_regions if h.uid != uid
+            ]
 
     def update_view_mode(self, is_inverted: bool) -> None:
         if self._project.is_inverted == is_inverted:
             return
         
-        self._save_undo_before_change()                         # ◄ FIX
-        
-        # ◄ FIX: Пересчитать label_offset при смене ориентации
         old_inv = self._project.is_inverted
-        self._project.is_inverted = is_inverted
-        self._convert_label_offsets(old_inv, is_inverted)
-        
-        self._notify_change(save_undo=False)
+        with self._transact():
+            self._project.is_inverted = is_inverted
+            self._convert_label_offsets(old_inv, is_inverted)
 
     def update_composition(
         self,
@@ -401,27 +471,23 @@ class ProjectManager:
                 error_msg = e.errors()[0]['msg'] if e.errors() else "Invalid data"
                 raise ValidationError(str(error_msg))
         
-        self._save_undo_before_change()                         # ◄ FIX
-        update.apply_to(comp)
-        self._notify_change(save_undo=False)
+        with self._transact():
+            update.apply_to(comp)
 
     def update_composition_style(self, uid: str, update: StyleUpdate) -> None:
         comp = self.get_composition(uid)
-        self._save_undo_before_change()                         # ◄ FIX
-        update.apply_to(comp.style)
-        self._notify_change(save_undo=False)
+        with self._transact():
+            update.apply_to(comp.style)
 
     def update_line_style(self, uid: str, update: StyleUpdate) -> None:
         line = self.get_line(uid)
-        self._save_undo_before_change()                         # ◄ FIX
-        update.apply_to(line.style)
-        self._notify_change(save_undo=False)
+        with self._transact():
+            update.apply_to(line.style)
 
     def update_line_arrow(self, uid: str, arrow: ArrowSettings) -> None:
         line = self.get_line(uid)
-        self._save_undo_before_change()
-        line.arrow = arrow
-        self._notify_change(save_undo=False)
+        with self._transact():
+            line.arrow = arrow
 
     def update_line_endpoints(self, line_uid: str, start_uid: str, end_uid: str) -> None:
         """
@@ -445,11 +511,10 @@ class ProjectManager:
                 if {line.start_uid, line.end_uid} == {start_uid, end_uid}:
                     raise DuplicateEntityError("Line with these endpoints exists")
         
-        self._save_undo_before_change()                         # ◄ FIX
         line = self.get_line(line_uid)
-        line.start_uid = start_uid
-        line.end_uid = end_uid
-        self._notify_change(save_undo=False)
+        with self._transact():
+            line.start_uid = start_uid
+            line.end_uid = end_uid
 
     def set_composition_label_pos(self, uid: str, x: float, y: float) -> None:
         comp = self.get_composition(uid)
@@ -460,14 +525,12 @@ class ProjectManager:
         except ValueError as e:
             raise ValidationError(f"Invalid coordinates: {e}")
         
-        self._save_undo_before_change()                         # ◄ FIX
-        comp.label_offset = (float(x - pt[0]), float(y - pt[1]))
-        self._notify_change(save_undo=False)
+        with self._transact():
+            comp.label_offset = (float(x - pt[0]), float(y - pt[1]))
 
     def set_vertex_label_pos(self, index: int, x: float, y: float) -> None:
-        self._save_undo_before_change()                         # ◄ FIX
-        self._project.vertex_labels_pos[str(index)] = (x, y)
-        self._notify_change(save_undo=False)
+        with self._transact():
+            self._project.vertex_labels_pos[str(index)] = (x, y)
 
     # =========================================================================
     # УДАЛЕНИЕ
@@ -484,11 +547,9 @@ class ProjectManager:
         
         logger.info(f"Deleting composition: {uid}")
         
-        self._save_undo_before_change()                         # ◄ FIX
+        self._save_undo_before_change()
         
-        old_batch = self._batch_mode
         self._batch_mode = True
-        
         try:
             del self._comp_map[uid]
             self._project.compositions = [
@@ -523,16 +584,15 @@ class ProjectManager:
                 if c.uid not in curves_to_remove
             ]
         finally:
-            self._batch_mode = old_batch
+            self._batch_mode = False
         
-        self._notify_change(save_undo=False)
+        self._notify_change()
 
     def delete_line(self, uid: str) -> None:
         self.get_line(uid)  # Проверка существования
-        self._save_undo_before_change()                         # ◄ FIX
-        del self._line_map[uid]
-        self._project.lines = [line for line in self._project.lines if line.uid != uid]
-        self._notify_change(save_undo=False)
+        with self._transact():
+            del self._line_map[uid]
+            self._project.lines = [line for line in self._project.lines if line.uid != uid]
 
     # =========================================================================
     # CURVE LINE CRUD
@@ -555,14 +615,13 @@ class ProjectManager:
         self.get_composition(start_uid)
         self.get_composition(end_uid)
 
-        self._save_undo_before_change()
-
         cline = CurveLine(start_uid=start_uid, end_uid=end_uid)
-        self._project.curve_lines.append(cline)
-        self._curve_map[cline.uid] = cline
+
+        with self._transact():
+            self._project.curve_lines.append(cline)
+            self._curve_map[cline.uid] = cline
 
         logger.bind(uid=cline.uid).info(f"Created curve line {start_uid} -> {end_uid}")
-        self._notify_change(save_undo=False)
         return cline.uid
 
     def update_curve_line_endpoints(
@@ -573,51 +632,52 @@ class ProjectManager:
         self.get_composition(start_uid)
         self.get_composition(end_uid)
 
-        self._save_undo_before_change()
         cline = self.get_curve_line(uid)
-        cline.start_uid = start_uid
-        cline.end_uid = end_uid
-        self._notify_change(save_undo=False)
+        with self._transact():
+            cline.start_uid = start_uid
+            cline.end_uid = end_uid
 
     def update_curve_line_style(self, uid: str, update: StyleUpdate) -> None:
         cline = self.get_curve_line(uid)
-        self._save_undo_before_change()
-        update.apply_to(cline.style)
-        self._notify_change(save_undo=False)
+        with self._transact():
+            update.apply_to(cline.style)
 
     def update_curve_line_arrow(self, uid: str, arrow: ArrowSettings) -> None:
         cline = self.get_curve_line(uid)
-        self._save_undo_before_change()
-        cline.arrow = arrow
-        self._notify_change(save_undo=False)
+        with self._transact():
+            cline.arrow = arrow
 
     def update_curve_line_guide_markers(
         self, uid: str, show: bool, style: StyleUpdate
     ) -> None:
         cline = self.get_curve_line(uid)
-        self._save_undo_before_change()
-        cline.show_guide_markers = show
-        style.apply_to(cline.guide_marker_style)
-        self._notify_change(save_undo=False)
+        with self._transact():
+            cline.show_guide_markers = show
+            style.apply_to(cline.guide_marker_style)
 
     def update_curve_line_guides(
-        self, uid: str, guides: List[GuidePoint], poly_degree: Optional[int] = None
+        self,
+        uid: str,
+        guides: List[GuidePoint],
+        poly_degree: Optional[int] = None,
+        curve_mode: Optional[str] = None,
     ) -> None:
         cline = self.get_curve_line(uid)
-        self._save_undo_before_change()
-        cline.guide_points = list(guides)
-        if poly_degree is not None:
-            cline.poly_degree = poly_degree
-        self._notify_change(save_undo=False)
+        with self._transact():
+            cline.guide_points = list(guides)
+            if poly_degree is not None:
+                cline.poly_degree = poly_degree
+            if curve_mode is not None:
+                cline.curve_mode = curve_mode
 
     def delete_curve_line(self, uid: str) -> None:
         self.get_curve_line(uid)
-        self._save_undo_before_change()
-        del self._curve_map[uid]
-        self._project.curve_lines = [
-            c for c in self._project.curve_lines if c.uid != uid
-        ]
-        self._notify_change(save_undo=False)
+        self._check_hatch_dependencies("curve", uid)
+        with self._transact():
+            del self._curve_map[uid]
+            self._project.curve_lines = [
+                c for c in self._project.curve_lines if c.uid != uid
+            ]
 
     # =========================================================================
     # РАСЧЁТЫ
@@ -682,7 +742,7 @@ class ProjectManager:
         self._rebuild_cache()
         self.clear_undo_history()
         self._is_modified = False
-        self._notify_change(save_undo=False)
+        self._notify_change()
 
     def new_project(self) -> None:
         """Сбрасывает к пустому проекту"""
@@ -691,7 +751,7 @@ class ProjectManager:
         self.clear_undo_history()
         self._is_modified = False
         logger.info("Project reset")
-        self._notify_change(save_undo=False)
+        self._notify_change()
 
     # =========================================================================
     # UNDO / REDO
@@ -704,7 +764,7 @@ class ProjectManager:
         self._redo_stack.append(copy.deepcopy(self._project))
         self._project = self._undo_stack.pop()
         self._rebuild_cache()
-        self._notify_change(save_undo=False)
+        self._notify_change()
         
         logger.info(f"Undo. Stack: {len(self._undo_stack)}")
         return True
@@ -716,7 +776,7 @@ class ProjectManager:
         self._undo_stack.append(copy.deepcopy(self._project))
         self._project = self._redo_stack.pop()
         self._rebuild_cache()
-        self._notify_change(save_undo=False)
+        self._notify_change()
         
         logger.info(f"Redo. Stack: {len(self._redo_stack)}")
         return True
@@ -740,8 +800,11 @@ class ProjectManager:
         self._line_map = {line.uid: line for line in self._project.lines}
         self._curve_map = {c.uid: c for c in self._project.curve_lines}
         self._annotation_map = {a.uid: a for a in self._project.annotations}
+        self._hatch_map = {
+            h.uid: h for h in self._project.hatch_regions
+        }
 
-    def _notify_change(self, save_undo: bool = True) -> None:
+    def _notify_change(self) -> None:
         if self._batch_mode:
             return
         
@@ -753,7 +816,7 @@ class ProjectManager:
     def _save_undo_before_change(self) -> None:
         """
         Сохраняет текущее состояние в undo-стек ПЕРЕД мутацией.
-        Вызывается явно в каждом мутирующем методе.
+        Используется внутри _transact(). Не вызывайте напрямую.
         """
         if not self._enable_undo:
             return
@@ -764,6 +827,21 @@ class ProjectManager:
         if len(self._undo_stack) > self._max_undo_size:
             self._undo_stack.pop(0)
 
+    @contextmanager
+    def _transact(self) -> Iterator[None]:
+        """
+        Единый паттерн для мутирующих операций:
+        - при входе сохраняет undo snapshot
+        - при нормальном выходе уведомляет об изменении
+        - при исключении НЕ уведомляет (состояние не изменилось)
+
+        Использование:
+            with self._transact():
+                self._project.some_field = new_value
+        """
+        self._save_undo_before_change()
+        yield
+        self._notify_change()
 
     def _convert_label_offsets(self, old_inv: bool, new_inv: bool) -> None:
         """
@@ -791,8 +869,8 @@ class ProjectManager:
                 
                 # Пересчитанный offset
                 comp.label_offset = (label_x - new_pt[0], label_y - new_pt[1])
-            except Exception:
-                # Если что-то сломалось — сбрасываем к дефолту
+            except (ValueError, ZeroDivisionError, TypeError):
+                logger.warning(f"Failed to convert label offset for {comp.uid}, resetting")
                 comp.label_offset = None
         
         # Пересчитываем позиции меток вершин
@@ -836,3 +914,16 @@ class ProjectManager:
                         )
                 except EntityNotFoundError:
                     pass
+
+    def _check_hatch_dependencies(self, kind: str, uid: str) -> None:
+        """Проверяет, что ни один hatch region не ссылается на удаляемую линию/кривую."""
+        for region in self._project.hatch_regions:
+            for seg in region.segments:
+                if kind == "line" and isinstance(seg, LineRefSegment) and seg.line_uid == uid:
+                    raise ValidationError(
+                        f"Cannot delete: line is used by hatch region '{region.name}'"
+                    )
+                if kind == "curve" and isinstance(seg, CurveRefSegment) and seg.curve_uid == uid:
+                    raise ValidationError(
+                        f"Cannot delete: curve is used by hatch region '{region.name}'"
+                    )

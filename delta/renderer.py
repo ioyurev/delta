@@ -6,12 +6,13 @@ from matplotlib.patches import PathPatch
 from matplotlib.path import Path
 from typing import Any, List, Literal
 from delta import math_utils
-from delta.models import ProjectData, RenderOverlay, Composition, ArrowSettings
 from delta.constants import (
     COLOR_BACKGROUND, COLOR_TERNARY_TRIANGLE, COLOR_PROJECTION,
-    COLOR_INTERSECTION, ZORDER_GRID, ZORDER_LINES, ZORDER_MASK, ZORDER_OVERLAY, ZORDER_PROJECTION, ZORDER_INTERSECTION,
+    COLOR_INTERSECTION, ZORDER_GRID, ZORDER_HATCH, ZORDER_LINES, ZORDER_MASK, ZORDER_OVERLAY, ZORDER_PROJECTION, ZORDER_INTERSECTION,
     VERTEX_LABEL_OFFSET, COMP_LABEL_OFFSET, TRIANGLE_HEIGHT
 )
+from delta.hatch import build_region_path
+from delta.models import ProjectData, RenderOverlay, Composition, ArrowSettings, HatchRegion
 
 # Константы отрисовки
 FONT_SIZE = 10
@@ -30,16 +31,9 @@ class ProjectRenderer:
     def __init__(self, ax: Axes):
         self.ax = ax
         self._line_artists: dict[str, Line2D] = {}
-        self._cached_overlay_uids: set[str] = set()
-        self._aspect_mode: Literal['equal', 'auto'] = 'equal'
 
-    def set_aspect_mode(self, mode: Literal['equal', 'auto']) -> None:
-        """Устанавливает режим пропорций: 'equal' или 'auto'"""
-        self._aspect_mode = mode
-
-    def clear(self):
+    def clear(self) -> None:
         self.ax.clear()
-        self.ax.set_aspect(self._aspect_mode)               # ◄ ИЗМЕНЕНО
         self.ax.set_facecolor(COLOR_BACKGROUND)
         self._line_artists.clear()
 
@@ -48,9 +42,13 @@ class ProjectRenderer:
         project: ProjectData,
         highlight_uids: list[str] | None = None,
         highlight_comp_uids: list[str] | None = None,
-    ):
+    ) -> None:
         """Полная перерисовка проекта"""
         self.clear()
+
+        aspect: Literal['equal', 'auto'] = 'equal' if project.render_settings.lock_aspect else 'auto'
+        self.ax.set_aspect(aspect)
+
         is_inv = project.is_inverted
         
         # 1. Треугольник
@@ -62,6 +60,11 @@ class ProjectRenderer:
         # 2. Сетка
         if project.grid.visible:
             self._draw_grid(project.grid.step, is_inv)
+
+        # 2b. Hatch-регионы (между сеткой и линиями)
+        for region in project.hatch_regions:
+            if region.visible:
+                self._draw_hatch_region(region, project, is_inv)
 
         # 3. Прямые линии (TieLine)
         comp_map = {p.uid: p for p in project.compositions}
@@ -109,9 +112,9 @@ class ProjectRenderer:
                 xs, ys = math_utils.fit_curve_through_points(
                     p_start, guide_pts, p_end,
                     poly_degree=cline.poly_degree,
+                    curve_mode=cline.curve_mode,
                 )
-            except Exception:
-                # Fallback: прямая линия
+            except (np.linalg.LinAlgError, ValueError, FloatingPointError):
                 xs = np.linspace(p_start[0], p_end[0], 300)
                 ys = np.linspace(p_start[1], p_end[1], 300)
 
@@ -137,7 +140,7 @@ class ProjectRenderer:
                 for gp in cline.guide_points:
                     try:
                         gpt = math_utils.bary_to_cart(gp.composition, is_inv)
-                    except Exception:
+                    except (ValueError, ZeroDivisionError):
                         continue
                     self.ax.plot(
                         gpt[0], gpt[1],
@@ -152,7 +155,7 @@ class ProjectRenderer:
         for comp in project.compositions:
             try:
                 pt = math_utils.bary_to_cart(comp.composition, is_inv)
-            except Exception:
+            except (ValueError, ZeroDivisionError):
                 continue
 
             # Маркер
@@ -210,7 +213,7 @@ class ProjectRenderer:
             self._draw_region_border(region_cart)
             rx = [pt[0] for pt in region_cart]
             ry = [pt[1] for pt in region_cart]
-            pad = 0.05
+            pad = project.render_settings.display_region_padding
             self.ax.set_xlim(min(rx) - pad, max(rx) + pad)
             self.ax.set_ylim(min(ry) - pad, max(ry) + pad)
         else:
@@ -224,6 +227,40 @@ class ProjectRenderer:
             self._draw_annotations(project.annotations, is_inv)
 
         self.ax.axis('off')
+
+    def _draw_hatch_region(
+        self, region: 'HatchRegion', project: ProjectData, is_inv: bool
+    ) -> None:
+        """Отрисовывает один hatch-регион."""
+
+        path_pts = build_region_path(region, project, is_inv)
+        if path_pts is None or len(path_pts) < 3:
+            return
+
+        xs = path_pts[:, 0]
+        ys = path_pts[:, 1]
+
+        # Заливка + штриховка
+        self.ax.fill(
+            xs, ys,
+            facecolor=region.fill_color,
+            alpha=region.fill_alpha,
+            hatch=region.hatch_pattern,
+            edgecolor=region.hatch_color,
+            linewidth=region.edge_width,
+            zorder=ZORDER_HATCH,
+            closed=True,
+        )
+
+        # Граница поверх (чёткая линия)
+        if region.edge_width > 0:
+            self.ax.plot(
+                list(xs) + [xs[0]],
+                list(ys) + [ys[0]],
+                color=region.edge_color,
+                linewidth=region.edge_width,
+                zorder=ZORDER_HATCH + 0.1,
+            )
 
     def draw_dynamic_overlay(self, overlay: RenderOverlay, is_inverted: bool) -> list:
         """
@@ -430,7 +467,7 @@ class ProjectRenderer:
                     continue
                 pt = math_utils.bary_to_cart(comp, is_inv)
                 pts.append((float(pt[0]), float(pt[1])))
-            except Exception:
+            except (ValueError, ZeroDivisionError):
                 continue
         if len(pts) < 3:
             return []
@@ -491,7 +528,7 @@ class ProjectRenderer:
                 continue
             try:
                 pos = math_utils.bary_to_cart(ann.position, is_inv)
-            except Exception:
+            except (ValueError, ZeroDivisionError):
                 continue
 
             font_kw = dict(
@@ -516,7 +553,7 @@ class ProjectRenderer:
                 try:
                     t = math_utils.bary_to_cart(ann.arrow_target, is_inv)
                     target_xy = (float(t[0]), float(t[1]))
-                except Exception:
+                except (ValueError, ZeroDivisionError):
                     target_xy = None
 
             common_kw: dict[str, Any] = dict(

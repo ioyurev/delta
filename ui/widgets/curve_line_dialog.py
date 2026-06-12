@@ -11,16 +11,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, List, TYPE_CHECKING
-
-from typing import cast
+from typing import Optional, List, TYPE_CHECKING, cast
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QComboBox, QPushButton, QCheckBox,
-    QSpinBox, QHeaderView,
-    QMessageBox, QLabel, QDoubleSpinBox, QSizePolicy,
+    QHeaderView, QMessageBox, QLabel, QDoubleSpinBox, QSizePolicy, QSpinBox
 )
 
 from delta.models import (
@@ -45,6 +42,7 @@ class CurveLineDialogResult:
     color: str
     line_style: str
     width: float
+    curve_mode: str = "spline"
     poly_degree: int = 3
     show_guide_markers: bool = False
     guide_marker_color: str = "#888888"
@@ -87,6 +85,7 @@ class CurveLineDialog(QDialog):
             else VisualStyle(color="#888888")
         )
         self._initial_show_gm = current_line.show_guide_markers if current_line else False
+        self._initial_curve_mode = current_line.curve_mode if current_line else "spline"
 
         self.setWindowTitle("Curve Line" if not current_line else "Edit Curve Line")
         self.setMinimumWidth(440)
@@ -131,24 +130,22 @@ class CurveLineDialog(QDialog):
         self.sb_width.setToolTip("Line thickness in points")
         form.addRow("Width:", self.sb_width)
 
-        self.cb_degree = QComboBox()
-        degree_items = [
-            ("Quadratic (2)", 2),
-            ("Cubic (3)", 3),
-            ("Degree 4", 4),
-            ("Degree 5", 5),
-        ]
-        for label, val in degree_items:
-            self.cb_degree.addItem(label, val)
-        current_degree = self._current_line.poly_degree if self._current_line else 3
-        for i in range(self.cb_degree.count()):
-            if self.cb_degree.itemData(i) == current_degree:
-                self.cb_degree.setCurrentIndex(i)
-                break
-        self.cb_degree.setToolTip(
-            "Polynomial degree for curve fitting.\n"
-            "Higher degree = more flexible curve, but may oscillate with few guide points."
+        self.cb_curve_mode = QComboBox()
+        self.cb_curve_mode.addItem("B-Spline (Interpolation)", "spline")
+        self.cb_curve_mode.addItem("Polynomial (Approximation)", "polynomial")
+        idx_mode = self.cb_curve_mode.findData(self._initial_curve_mode)
+        if idx_mode >= 0:
+            self.cb_curve_mode.setCurrentIndex(idx_mode)
+        self.cb_curve_mode.setToolTip(
+            "Spline: passes exactly through all points, no oscillations.\n"
+            "Polynomial: least-squares approximation, guide points are approximate."
         )
+        self.cb_curve_mode.currentIndexChanged.connect(self._on_curve_mode_changed)
+        form.addRow("Curve type:", self.cb_curve_mode)
+
+        self.cb_degree = QComboBox()
+        self._populate_degree_combo()
+        self.cb_degree.setToolTip("Degree of the spline or polynomial.")
         form.addRow("Degree:", self.cb_degree)
 
         gb.setLayout(form)
@@ -184,7 +181,7 @@ class CurveLineDialog(QDialog):
         self._layout.addWidget(gb)
 
     def _init_guide_points(self) -> None:
-        gb = QGroupBox("Guide Points  (approximated, endpoints are fixed)")
+        gb = QGroupBox("Guide Points")
         vbox = QVBoxLayout()
 
         # Таблица: # | comp_A | comp_B | comp_C | [delete]
@@ -305,6 +302,7 @@ class CurveLineDialog(QDialog):
 
     def _init_buttons(self) -> None:
         btns = QHBoxLayout()
+        btns.addStretch()
 
         btn_ok = QPushButton("OK")
         btn_ok.setDefault(True)
@@ -316,6 +314,45 @@ class CurveLineDialog(QDialog):
         btns.addWidget(btn_ok)
         btns.addWidget(btn_cancel)
         self._layout.addLayout(btns)
+
+    def _populate_degree_combo(self) -> None:
+        """Заполняет список степеней в зависимости от выбранного типа кривой."""
+        self.cb_degree.blockSignals(True)
+        self.cb_degree.clear()
+
+        mode = self.cb_curve_mode.currentData()
+        current_degree = self._current_line.poly_degree if self._current_line else 3
+
+        if mode == "spline":
+            items = [
+                ("Linear (1)", 1),
+                ("Quadratic (2)", 2),
+                ("Cubic (3)", 3),
+            ]
+            if current_degree > 3:
+                current_degree = 3
+        else:
+            items = [
+                ("Quadratic (2)", 2),
+                ("Cubic (3)", 3),
+                ("Degree 4", 4),
+                ("Degree 5", 5),
+            ]
+            if current_degree < 2:
+                current_degree = 3
+
+        for label, val in items:
+            self.cb_degree.addItem(label, val)
+
+        for i in range(self.cb_degree.count()):
+            if self.cb_degree.itemData(i) == current_degree:
+                self.cb_degree.setCurrentIndex(i)
+                break
+
+        self.cb_degree.blockSignals(False)
+
+    def _on_curve_mode_changed(self) -> None:
+        self._populate_degree_combo()
 
     # =========================================================================
     # УПРАВЛЕНИЕ ТАБЛИЦЕЙ
@@ -434,6 +471,7 @@ class CurveLineDialog(QDialog):
             color=self.btn_color.color(),
             line_style=self.cb_style.currentData(),
             width=self.sb_width.value(),
+            curve_mode=self.cb_curve_mode.currentData(),
             poly_degree=self.cb_degree.currentData(),
             show_guide_markers=self.chk_gm.isChecked(),
             guide_marker_color=self.btn_gm_color.color(),

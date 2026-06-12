@@ -34,6 +34,11 @@ class CanvasInteractor(QObject):
         self.dragged_artist = None  # matplotlib Text artist
         self.drag_offset: tuple[float, float] = (0.0, 0.0)
 
+    @property
+    def is_dragging(self) -> bool:
+        """True во время перетаскивания текстовой метки."""
+        return self._is_dragging
+
     def set_mode(self, mode: str) -> None:
         """Переключает режим интерактора. mode: MODE_NORMAL | MODE_GUIDE_PICK"""
         self._mode = mode

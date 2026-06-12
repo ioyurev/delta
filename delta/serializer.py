@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import ValidationError as PydanticValidationError
 
 from delta.models import ProjectData
+from delta.migration import migrate_project_data
 from loguru import logger
 
 
@@ -57,6 +58,9 @@ class ProjectSerializer:
             raise ProjectFileError(f"Read error: {e}")
         
         try:
+            # Миграция старых форматов (SSOT: delta/migration.py)
+            data = migrate_project_data(data)
+
             # Pydantic v2: model_validate() для десериализации с валидацией
             project = ProjectData.model_validate(data)
             logger.success("Project loaded and validated successfully")

@@ -2,11 +2,12 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QSizePolicy
-from typing import Optional, Any, Literal
+from typing import Optional, Any
 
 from delta.models import Composition, RenderOverlay, ProjectData
 
 from delta.renderer import ProjectRenderer
+from delta.render_layout import apply_figure_margins
 from ui.canvas.interactor import CanvasInteractor
 
 
@@ -96,10 +97,11 @@ class PlotCanvas(FigureCanvasQTAgg):
         overlay_data: Optional[RenderOverlay] = None, 
         force_full_redraw: bool = False
     ) -> None:
-        if self.interactor._is_dragging:
+        if self.interactor.is_dragging:
             return
         
         self.current_project = project_data
+        apply_figure_margins(self.fig, project_data)
         
         new_highlights = overlay_data.highlight_lines_uids if overlay_data else []
         highlight_comp_uids = overlay_data.highlight_comp_uids if overlay_data else []
@@ -221,15 +223,15 @@ class PlotCanvas(FigureCanvasQTAgg):
         if self.current_project:
             self.draw_project(self.current_project, force_full_redraw=True)
 
-    def set_aspect_locked(self, locked: bool) -> None:          # ◄ НОВОЕ
+    def set_aspect_locked(self, locked: bool) -> None:
         """
-        Переключает режим пропорций осей.
-        
-        locked=True:  'equal' — 1 единица X = 1 единица Y
-        locked=False: 'auto'  — оси растягиваются по доступному пространству
+        Backward-compatible wrapper.
+
+        SSOT:
+            Источник истины для aspect — project_data.render_settings.lock_aspect.
+            Этот метод больше не меняет состояние renderer напрямую, а только
+            инициирует перерисовку.
         """
-        mode: Literal['equal', 'auto'] = 'equal' if locked else 'auto'
-        self.project_renderer.set_aspect_mode(mode)
         self._static_background = None
         self._needs_full_redraw = True
         if self.current_project:

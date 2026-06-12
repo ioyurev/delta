@@ -2,6 +2,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QPushButton, QListWidget, QListWidgetItem, QMenu,
 )
+from typing import Optional
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QKeyEvent, QAction, QColor, QBrush
 from delta.models import ProjectData
@@ -83,6 +84,23 @@ class LinesManager(QWidget):
         layout.addWidget(self.btn_calc)
 
         self._current_lines = []
+
+    def get_selected_line(self) -> Optional[tuple[str, bool]]:
+        """
+        Возвращает (uid, is_curve) выбранной линии или None.
+        """
+        item = self.list_widget.currentItem()
+        if item is None:
+            return None
+        uid = item.data(Qt.ItemDataRole.UserRole)
+        if not uid:
+            return None
+        is_curve = item.data(_ROLE_TYPE) == _TYPE_CURVE
+        return (uid, is_curve)
+
+    def has_list_focus(self) -> bool:
+        """True, если фокус ввода на списке линий."""
+        return self.list_widget.hasFocus()
 
     def update_view(self, project_data: ProjectData) -> None:
         self.list_widget.clear()
