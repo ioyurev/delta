@@ -31,6 +31,7 @@ class CompositionsTable(QWidget):
     view_mode_changed = Signal(bool)
     aspect_lock_changed = Signal(bool)
     validation_error = Signal(str)
+    open_naveski_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -103,6 +104,15 @@ class CompositionsTable(QWidget):
         h_mass.addWidget(self._sp_m_a)
         h_mass.addWidget(self._sp_m_b)
         h_mass.addWidget(self._sp_m_c)
+
+        self._btn_naveski = QPushButton("\u2696 Naveski\u2026")
+        self._btn_naveski.setToolTip(
+            "Open sample mass calculator.\n"
+            "Calculates component masses (naveski) for a given composition and total mass."
+        )
+        self._btn_naveski.clicked.connect(self.open_naveski_requested)
+        h_mass.addWidget(self._btn_naveski)
+
         sys_lay.addLayout(h_mass)
 
          # View & Grid
@@ -166,7 +176,10 @@ class CompositionsTable(QWidget):
             }
         """)
         btn_add.clicked.connect(self.request_add_composition.emit)
-        btn_add.setToolTip("Create a new composition point (Ctrl+click on diagram also works)")
+        btn_add.setToolTip(
+            "Create a new composition point.\n"
+            "Tip: Ctrl+Click on the diagram to add a point at cursor position."
+        )
         
         layout.addWidget(self.table)
         

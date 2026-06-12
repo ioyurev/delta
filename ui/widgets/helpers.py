@@ -661,17 +661,17 @@ def get_adaptive_colors() -> dict[str, str]:
 def get_message_style(style_type: str) -> str:
     """
     Возвращает CSS-стиль для сообщений, адаптированный к теме.
-    
+
     Args:
         style_type: "success" | "warning" | "error" | "default"
-    
+
     Returns:
         CSS-строка для стилизации сообщения
     """
     colors = get_adaptive_colors()
-    
+
     base_style = "font-weight: bold; padding: 10px; border-radius: 4px;"
-    
+
     if style_type == "success":
         return f"color: {colors['text_success']}; background: {colors['bg_success']}; {base_style}"
     elif style_type == "warning":
@@ -680,28 +680,6 @@ def get_message_style(style_type: str) -> str:
         return f"color: {colors['text_error']}; background: {colors['bg_error']}; {base_style}"
     else:
         return f"color: {colors['text_primary']}; background: {colors['bg_secondary']}; {base_style}"
-
-
-def get_overlay_style() -> str:
-    """
-    Возвращает стиль для координатного overlay.
-    
-    Returns:
-        CSS-строка для стилизации overlay
-    """
-    colors = get_adaptive_colors()
-    return f"""
-        QLabel {{
-            background-color: {colors['bg_primary']};
-            border: 1px solid {colors['border']};
-            border-radius: 4px;
-            padding: 6px;
-            font-family: monospace;
-            font-weight: bold;
-            font-size: 12px;
-            color: {colors['text_primary']};
-        }}
-    """
 
 
 def get_table_cell_style(style_type: str) -> str:

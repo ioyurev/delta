@@ -232,7 +232,6 @@ class ProjectRenderer:
         self, region: 'HatchRegion', project: ProjectData, is_inv: bool
     ) -> None:
         """Отрисовывает один hatch-регион."""
-
         path_pts = build_region_path(region, project, is_inv)
         if path_pts is None or len(path_pts) < 3:
             return
@@ -240,19 +239,31 @@ class ProjectRenderer:
         xs = path_pts[:, 0]
         ys = path_pts[:, 1]
 
-        # Заливка + штриховка
-        self.ax.fill(
-            xs, ys,
-            facecolor=region.fill_color,
-            alpha=region.fill_alpha,
-            hatch=region.hatch_pattern,
-            edgecolor=region.hatch_color,
-            linewidth=region.edge_width,
-            zorder=ZORDER_HATCH,
-            closed=True,
-        )
+        # Заливка цветом (если alpha > 0)
+        if region.fill_alpha > 0:
+            self.ax.fill(
+                xs, ys,
+                facecolor=region.fill_color,
+                alpha=region.fill_alpha,
+                edgecolor='none',
+                linewidth=0,
+                zorder=ZORDER_HATCH,
+                closed=True,
+            )
 
-        # Граница поверх (чёткая линия)
+        # Штриховка (отдельный патч: facecolor='none', lw=0, edgecolor=hatch_color)
+        if region.hatch_pattern:
+            self.ax.fill(
+                xs, ys,
+                facecolor='none',
+                hatch=region.hatch_pattern,
+                edgecolor=region.hatch_color,
+                linewidth=0,
+                zorder=ZORDER_HATCH + 0.05,
+                closed=True,
+            )
+
+        # Отдельный контур, только если пользователь явно включил
         if region.edge_width > 0:
             self.ax.plot(
                 list(xs) + [xs[0]],

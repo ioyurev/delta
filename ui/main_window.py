@@ -27,8 +27,10 @@ from ui.widgets.about_dialog import AboutDialog
 from ui.widgets.docs_viewer import DocsViewer
 from ui.widgets.display_region_widget import DisplayRegionWidget
 from ui.widgets.annotation_widget import AnnotationWidget
+from ui.widgets.hatch_widget import HatchWidget
+from ui.widgets.naveski_dialog import NaveskiDialog
 from ui.widgets.lever_mix_dialog import LeverMixDialog
-from ui.widgets.helpers import handle_entity_errors, build_menu, wait_cursor, get_overlay_style
+from ui.widgets.helpers import handle_entity_errors, build_menu, wait_cursor
 from delta import math_utils
 
 
@@ -60,6 +62,7 @@ class MainWindow(QMainWindow):
         self._active_curve_dlg: CurveLineDialog | None = None
         # Немодальный диалог Lever Mix
         self._lever_mix_dlg: LeverMixDialog | None = None
+        self._intersection_dlg: IntersectionDialog | None = None
         # Кто ожидает результат выбора точки на холсте: "" | "curve" | "annotation:{field}"
         self._pending_pick_requester: str = ""
 
@@ -205,22 +208,30 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.annotation_widget, "Annotations")
         tabs.setTabToolTip(4, "Place text annotations on the diagram")
 
+        self.hatch_widget = HatchWidget()
+        tabs.addTab(self.hatch_widget, "Hatch")
+        tabs.setTabToolTip(5, "Define hatched/filled regions on the diagram")
+
         # Обновление при смене вкладки
         tabs.currentChanged.connect(self._refresh_ui)
 
         return tabs
 
     def _init_overlay(self):
-        """Создаёт оверлей с координатами"""
-        self.coord_overlay = QLabel(self.canvas)
-        self.coord_overlay.setStyleSheet(get_overlay_style())
-        self.coord_overlay.hide()
-        
-        # Добавляем tooltip для координатного оверлея
-        self.coord_overlay.setToolTip(
+        """Создаёт координатный label в StatusBar (не перекрывает canvas)."""
+        self.coord_label = QLabel("")
+        self.coord_label.setStyleSheet(
+            "QLabel {"
+            "  font-family: monospace;"
+            "  font-size: 11px;"
+            "  padding: 2px 8px;"
+            "}"
+        )
+        self.coord_label.setToolTip(
             "Cursor position in molar fractions\n"
             "(barycentric coordinates, normalized)"
         )
+        self.statusBar().addPermanentWidget(self.coord_label)
 
     def _init_default_data(self):
         """Создаёт дефолтные вершины треугольника"""
@@ -255,6 +266,7 @@ class MainWindow(QMainWindow):
         self.table_widget.request_edit_style.connect(self._on_comp_style_req)
         self.table_widget.request_delete_composition.connect(self._on_comp_delete_req)
         self.table_widget.validation_error.connect(self._on_validation_error)
+        self.table_widget.open_naveski_requested.connect(self._on_open_naveski)
         
         # Lines Manager — straight lines
         self.lines_widget.request_add_line.connect(self._on_line_add_req)
@@ -269,6 +281,7 @@ class MainWindow(QMainWindow):
 
         # Canvas interactor — guide point pick
         self.canvas.interactor.guide_point_picked.connect(self._on_guide_point_picked)
+        self.canvas.interactor.ctrl_click_add.connect(self._on_ctrl_click_add)
         
         # Analysis Panel
         self.analysis_widget.update_needed.connect(self._refresh_ui)
@@ -287,11 +300,31 @@ class MainWindow(QMainWindow):
         self.annotation_widget.canvas_pick_requested.connect(self._on_annotation_pick_requested)
         self.canvas.text_annotation_dropped.connect(self._on_text_annotation_dropped)
 
+        # Hatch Regions
+        self.hatch_widget.request_add.connect(self._on_hatch_add)
+        self.hatch_widget.request_remove.connect(self._on_hatch_remove)
+        self.hatch_widget.region_changed.connect(self._on_hatch_changed)
+        self.hatch_widget.segments_changed.connect(self._on_hatch_segments_changed)
+
     def _on_validation_error(self, message: str):
         """Показывает ошибку/предупреждение валидации в StatusBar"""
         # Для заметок (Note:) показываем дольше
         timeout = 5000 if message.startswith("Note:") else 4000
         self.statusBar().showMessage(f"⚠ {message}", timeout)
+
+    def _on_open_naveski(self) -> None:
+        """Открывает калькулятор масс навесок."""
+        masses = self.controller.get_component_molar_masses()
+        if not all(m is not None for m in masses):
+            QMessageBox.information(
+                self,
+                "Molar Masses Required",
+                "Please set molar masses for all three components\n"
+                "in System Settings before using the calculator.",
+            )
+            return
+        dlg = NaveskiDialog(self.controller, parent=self)
+        dlg.exec()
 
     # =========================================================================
     # ОБРАБОТЧИКИ: ДАННЫЕ И ОТРИСОВКА
@@ -315,6 +348,7 @@ class MainWindow(QMainWindow):
         self.lines_widget.update_view(project_data)
         self.region_widget.update_view(project_data)
         self.annotation_widget.update_view(project_data)
+        self.hatch_widget.update_view(project_data)
 
         # Блокируем сигналы чтобы update_view → _on_calc_request
         # не вызвал повторную перерисовку canvas
@@ -326,10 +360,10 @@ class MainWindow(QMainWindow):
     def _on_mouse_hover(self, comp: Composition):
         """Принимает координаты мыши и ставит в очередь обработку."""
         if comp.a < -0.01 or comp.b < -0.01 or comp.c < -0.01:
-            self.coord_overlay.hide()
+            self.coord_label.setText("")
             return
 
-        # Обновляем overlay координат сразу (лёгкая операция)
+        # Обновляем координаты в StatusBar сразу (лёгкая операция)
         self._update_coord_overlay(comp)
 
         # Тяжёлую часть (analysis + canvas redraw) — через throttle
@@ -338,33 +372,25 @@ class MainWindow(QMainWindow):
             self._hover_timer.start()
 
     def _update_coord_overlay(self, comp: Composition) -> None:
-        """Обновляет текст оверлея координат (лёгкая операция)."""
+        """Обновляет координаты в StatusBar (лёгкая операция)."""
         names = self.controller.get_components()
         d = DISPLAY_DECIMALS_CURSOR
 
         try:
             a, b, c = comp.normalized
             text = (
-                f"Molar fractions:\n"
-                f"{'─' * 14}\n"
-                f"{names[0]}: {a:.{d}f}\n"
-                f"{names[1]}: {b:.{d}f}\n"
-                f"{names[2]}: {c:.{d}f}\n"
-                f"{'─' * 14}\n"
-                f"Σ = 1.0"
+                f"{names[0]}: {a:.{d}f}  "
+                f"{names[1]}: {b:.{d}f}  "
+                f"{names[2]}: {c:.{d}f}"
             )
         except (ValueError, ZeroDivisionError):
             text = (
-                f"{names[0]}: {comp.a:.{d}f}\n"
-                f"{names[1]}: {comp.b:.{d}f}\n"
+                f"{names[0]}: {comp.a:.{d}f}  "
+                f"{names[1]}: {comp.b:.{d}f}  "
                 f"{names[2]}: {comp.c:.{d}f}"
             )
 
-        self.coord_overlay.setText(text)
-        self.coord_overlay.adjustSize()
-        self.coord_overlay.move(10, 10)
-        self.coord_overlay.show()
-        self.coord_overlay.raise_()
+        self.coord_label.setText(text)
 
     def _process_pending_hover(self) -> None:
         """Обрабатывает отложенный hover (вызывается по таймеру ~60fps)."""
@@ -557,6 +583,19 @@ class MainWindow(QMainWindow):
         except ValidationError as e:
             # На случай, если что-то пойдет не так, показываем ошибку пользователю
             QMessageBox.warning(self, "Creation Error", str(e))
+
+    def _on_ctrl_click_add(self, comp: Composition) -> None:
+        """Ctrl+Click на холсте — добавляет точку в месте клика."""
+        try:
+            a, b, c = comp.normalized
+            uid = self.controller.create_composition(
+                name="New Point",
+                a=a, b=b, c=c,
+            )
+            self.statusBar().showMessage("Composition added (Ctrl+Click)", 3000)
+            self.table_widget.select_composition(uid)
+        except Exception as e:
+            self.statusBar().showMessage(f"Cannot add point: {e}", 4000)
 
     @handle_entity_errors
     def _on_line_del_req(self, uid: str):
@@ -759,12 +798,24 @@ class MainWindow(QMainWindow):
         if self.controller.get_line_count() < 2:
             QMessageBox.warning(self, "Info", "Need at least 2 lines.")
             return
-        
+
+        if self._intersection_dlg is not None:
+            self._intersection_dlg.raise_()
+            self._intersection_dlg.activateWindow()
+            return
+
         dlg = IntersectionDialog(self.controller, parent=self)
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
         dlg.overlay_changed.connect(self._on_overlay_changed)
         dlg.intersection_found.connect(self._on_intersection_found)
-        dlg.exec()
-        
+        dlg.finished.connect(self._on_intersection_dlg_closed)
+        self._intersection_dlg = dlg
+        dlg.show()
+
+    def _on_intersection_dlg_closed(self) -> None:
+        """Очистка при закрытии IntersectionDialog."""
+        self._on_overlay_changed(RenderOverlay())
+        self._intersection_dlg = None
         self._refresh_ui()
 
     def _on_overlay_changed(self, overlay: RenderOverlay):
@@ -836,6 +887,32 @@ class MainWindow(QMainWindow):
         is_inv = self.controller.project_data.is_inverted
         new_pos = math_utils.cart_to_bary(x, y, is_inv)
         self.controller.update_annotation(uid, position=new_pos)
+
+    # =========================================================================
+    # ОБРАБОТЧИКИ: HATCH REGIONS
+    # =========================================================================
+
+    def _on_hatch_add(self) -> None:
+        self.controller.create_hatch_region(
+            segments=[],
+            name="New Region",
+        )
+        self.statusBar().showMessage("Hatch region added — add boundary segments", 3000)
+
+    @handle_entity_errors
+    def _on_hatch_remove(self, uid: str) -> None:
+        self.controller.delete_hatch_region(uid)
+        self.statusBar().showMessage("Hatch region removed", 2000)
+
+    @handle_entity_errors
+    def _on_hatch_changed(self, uid: str, fields: object) -> None:
+        if isinstance(fields, dict):
+            self.controller.update_hatch_region(uid, **fields)
+
+    @handle_entity_errors
+    def _on_hatch_segments_changed(self, uid: str, segments: object) -> None:
+        if isinstance(segments, list):
+            self.controller.update_hatch_region(uid, segments=segments)
 
     # =========================================================================
     # УПРАВЛЕНИЕ СОСТОЯНИЕМ ОКНА

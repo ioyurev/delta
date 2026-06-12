@@ -15,6 +15,7 @@ from typing import Optional
 from matplotlib.axes import Axes
 from matplotlib.backend_bases import MouseEvent
 from matplotlib.text import Text
+from matplotlib.backend_tools import Cursors
 
 from delta import math_utils
 from delta.models import ProjectData
@@ -60,6 +61,7 @@ class MapInteractor:
         self._fig.canvas.mpl_connect("motion_notify_event", self._on_move)  # type: ignore[arg-type]
         self._fig.canvas.mpl_connect("button_press_event", self._on_press)  # type: ignore[arg-type]
         self._fig.canvas.mpl_connect("button_release_event", self._on_release)  # type: ignore[arg-type]
+        self._cursor_over_draggable = False
 
     # =====================================================================
     # КООРДИНАТНЫЙ OVERLAY
@@ -122,7 +124,13 @@ class MapInteractor:
     # =====================================================================
 
     def _find_draggable(self, event: MouseEvent) -> Optional[Text]:
-        """Ищет Text-артист под курсором, у которого есть gid."""
+        """Ищет Text-артист под курсором, у которого есть gid.
+        
+        Работает даже если курсор за пределами осей (для меток,
+        вынесенных за display region).
+        """
+        if event.x is None or event.y is None:
+            return None
         for artist in self._ax.texts:
             if artist is self._coord_text:
                 continue
@@ -134,13 +142,17 @@ class MapInteractor:
         return None
 
     def _on_press(self, event: MouseEvent) -> None:
-        if event.button != 1 or not event.inaxes:
-            return
-        if event.xdata is None or event.ydata is None:
+        if event.button != 1:
             return
 
         artist = self._find_draggable(event)
         if artist is None:
+            return
+
+        # Получаем координаты в системе данных (могут быть None если за пределами осей)
+        # В этом случае используем transform для конвертации display -> data
+        xdata, ydata = self._event_to_data(event)
+        if xdata is None or ydata is None:
             return
 
         self._dragged_artist = artist
@@ -148,10 +160,11 @@ class MapInteractor:
         self._dragging = True
 
         x0, y0 = artist.get_position()
-        self._drag_offset = (x0 - event.xdata, y0 - event.ydata)
+        self._drag_offset = (x0 - xdata, y0 - ydata)
 
         artist.set_animated(True)
         canvas = self._fig.canvas  # type: ignore[union-attr]
+        canvas.set_cursor(Cursors.MOVE)
         canvas.draw()
         self._background = canvas.copy_from_bbox(self._ax.bbox)  # type: ignore[attr-defined, union-attr]
         self._ax.draw_artist(artist)
@@ -169,8 +182,10 @@ class MapInteractor:
         self._dragged_artist = None
         self._dragged_gid = None
         self._background = None
+        self._cursor_over_draggable = False
 
         canvas = self._fig.canvas  # type: ignore[union-attr]
+        canvas.set_cursor(Cursors.POINTER)
         canvas.draw_idle()
 
         # Сохраняем новую позицию в модель
@@ -211,27 +226,60 @@ class MapInteractor:
     # =====================================================================
 
     def _on_move(self, event: MouseEvent) -> None:
-        if not event.inaxes:
-            self._hide_overlay()
-            if self._fig:
-                self._fig.canvas.draw_idle()  # type: ignore[union-attr]
-            return
+        canvas = self._fig.canvas  # type: ignore[union-attr]
 
-        # Drag
+        # Drag — работает даже за пределами осей
         if self._dragging and self._dragged_artist is not None:
-            if event.xdata is not None and event.ydata is not None:
-                new_x = event.xdata + self._drag_offset[0]
-                new_y = event.ydata + self._drag_offset[1]
+            xdata, ydata = self._event_to_data(event)
+            if xdata is not None and ydata is not None:
+                new_x = xdata + self._drag_offset[0]
+                new_y = ydata + self._drag_offset[1]
                 self._dragged_artist.set_position((new_x, new_y))
 
-                canvas = self._fig.canvas  # type: ignore[union-attr]
                 if self._background is not None:
                     canvas.restore_region(self._background)
                 self._ax.draw_artist(self._dragged_artist)
                 canvas.blit(self._ax.bbox)
             return
 
-        # Overlay
+        # Курсор: рука если над перетаскиваемым элементом
+        hit = self._find_draggable(event)
+        if hit is not None:
+            if not self._cursor_over_draggable:
+                canvas.set_cursor(Cursors.HAND)
+                self._cursor_over_draggable = True
+        else:
+            if self._cursor_over_draggable:
+                canvas.set_cursor(Cursors.POINTER)
+                self._cursor_over_draggable = False
+
+        # Overlay — только когда курсор внутри осей
+        if not event.inaxes:
+            self._hide_overlay()
+            canvas.draw_idle()
+            return
+
         self._update_overlay(event)
-        if self._fig:
-            self._fig.canvas.draw_idle()  # type: ignore[union-attr]
+        canvas.draw_idle()
+
+    def _event_to_data(self, event: MouseEvent) -> tuple[Optional[float], Optional[float]]:
+        """
+        Конвертирует координаты события в систему данных осей.
+        
+        Работает даже если курсор за пределами осей (event.xdata is None).
+        Это нужно для перетаскивания меток, вынесенных за display region.
+        """
+        if event.xdata is not None and event.ydata is not None:
+            return event.xdata, event.ydata
+        
+        # Курсор за пределами осей — конвертируем вручную
+        if event.x is None or event.y is None:
+            return None, None
+        
+        try:
+            # display coords -> data coords
+            inv_transform = self._ax.transData.inverted()
+            xdata, ydata = inv_transform.transform((event.x, event.y))
+            return float(xdata), float(ydata)
+        except Exception:
+            return None, None

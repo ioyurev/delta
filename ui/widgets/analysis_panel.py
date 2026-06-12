@@ -85,9 +85,9 @@ class AnalysisPanel(QWidget):
         self.cb_comp_b = QComboBox()
         self.cb_comp_c = QComboBox()
         
-        self.cb_comp_c.setVisible(False)
+        self.cb_comp_c.setEnabled(False)
         self.lbl_c = QLabel("Composition C:")
-        self.lbl_c.setVisible(False)
+        self.lbl_c.setEnabled(False)
         
         self.cb_comp_a.setToolTip("First basis composition (endpoint of tie-line)")
         self.cb_comp_b.setToolTip("Second basis composition (endpoint of tie-line)")
@@ -343,8 +343,8 @@ class AnalysisPanel(QWidget):
 
     def _on_settings_changed(self):
         is_ternary = self.rb_ternary.isChecked()
-        self.cb_comp_c.setVisible(is_ternary)
-        self.lbl_c.setVisible(is_ternary)
+        self.cb_comp_c.setEnabled(is_ternary)
+        self.lbl_c.setEnabled(is_ternary)
         
         # Проверяем валидность базиса при переключении в Ternary
         if is_ternary:

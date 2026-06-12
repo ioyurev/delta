@@ -158,9 +158,8 @@ class IntersectionDialog(QDialog):
     def _on_add_comp(self):
         """Обработчик кнопки 'Add Intersection as Composition'"""
         if self.found_intersection:
-            # ✅ Испускаем сигнал с результатом
             self.intersection_found.emit(self.found_intersection)
-            self.accept()
+            # Не закрываем диалог — пользователь может продолжить расчёты
     
     def _build_overlay(self, result: IntersectionResult, uid1: str, uid2: str) -> RenderOverlay:
         """Строит overlay для отображения на графике"""
@@ -244,12 +243,7 @@ class IntersectionDialog(QDialog):
         self.lbl_result.setText(message)
         self.lbl_result.setStyleSheet(style)
 
-    def _on_close(self) -> None:
-        """Обработчик закрытия — очищаем overlay"""
-        self.overlay_changed.emit(RenderOverlay())  # Пустой overlay
-        self.reject()
-    
     def closeEvent(self, event) -> None:
-        """Перехватываем закрытие окна (крестик)"""
+        """Перехватываем закрытие окна (крестик или Close)"""
         self.overlay_changed.emit(RenderOverlay())
         super().closeEvent(event)

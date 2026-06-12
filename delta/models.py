@@ -400,7 +400,7 @@ class HatchRegion(BaseModel):
     fill_color: str = "#000000"
     fill_alpha: float = Field(default=0.05, ge=0.0, le=1.0)
     edge_color: str = "#000000"
-    edge_width: float = Field(default=1.0, ge=0.0, le=10.0)
+    edge_width: float = Field(default=0.0, ge=0.0, le=10.0)
     visible: bool = True
 
     @field_validator('hatch_pattern')
